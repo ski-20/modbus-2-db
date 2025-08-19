@@ -150,11 +150,19 @@ def set_state_many(pairs):
 # ------------- Modbus helpers -------------
 def read_words(start_mw, count):
     cli = get_client()
-    # ✅ pymodbus 3.x requires keyword args
     rr = cli.read_holding_registers(address=start_mw, count=count, slave=SLAVE_ID)
-    if rr.isError():
-        raise RuntimeError(rr)
+    # If the server returned a Modbus exception, format it into a clear string
+    if hasattr(rr, "isError") and rr.isError():
+        fc = getattr(rr, "function_code", None)
+        ec = getattr(rr, "exception_code", None)
+        # Build a readable message (fc/ec are helpful for IllegalAddress etc.)
+        msg = f"Modbus exception: function={fc} exception={ec} resp={rr}"
+        raise RuntimeError(msg)
+    # Defensive check in case rr is None or malformed
+    if rr is None or not hasattr(rr, "registers"):
+        raise RuntimeError(f"Modbus read returned no data for address={start_mw} count={count}")
     return rr.registers
+
 
 def to_int16(w):   return w - 65536 if w >= 32768 else w
 def to_uint16(w):  return w
