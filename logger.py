@@ -52,8 +52,8 @@ def pump_tags(base, pump_name):
     ]
 
 
-P1_TAGS = pump_tags(P1_BASE, "P1", P1_OUT_WORD_MW)
-P2_TAGS = pump_tags(P2_BASE, "P2", P2_OUT_WORD_MW)
+P1_TAGS = pump_tags(P1_BASE, "P1")
+P2_TAGS = pump_tags(P2_BASE, "P2")
 
 # Logging policy for pumps
 FAST_SEC   = 1.0     # fast log cadence when that pump is running
