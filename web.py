@@ -198,14 +198,11 @@ def _query_logs(tag: str, mins: int, limit: int, bucket_s: Optional[int]):
           {tag_clause}
         ),
         agg AS (
-          SELECT s, tag, avg(value) AS value, MAX(unit) AS unit
+          SELECT s AS ts, tag, avg(value) AS value, MAX(unit) AS unit
           FROM rows
           GROUP BY tag, s
         )
-        SELECT
-          s AS ts,
-          strftime('%Y-%m-%d %I:%M:%S %p', replace(s,'T',' ')) AS ts_fmt,
-          tag, value, unit
+        SELECT ts, tag, value, unit
         FROM agg
         ORDER BY ts DESC
         LIMIT ?
@@ -215,10 +212,7 @@ def _query_logs(tag: str, mins: int, limit: int, bucket_s: Optional[int]):
         args = [since_ts] + ([tag] if tag else []) + [limit]
     else:
         q = """
-        SELECT
-          ts,
-          strftime('%Y-%m-%d %I:%M:%S %p', replace(substr(ts,1,19),'T',' ')) AS ts_fmt,
-          tag, value, unit
+        SELECT ts, tag, value, unit
         FROM logs
         WHERE ts >= ?
         {tag_clause}
@@ -230,7 +224,26 @@ def _query_logs(tag: str, mins: int, limit: int, bucket_s: Optional[int]):
         args = [since_ts] + ([tag] if tag else []) + [limit]
 
     with db() as con:
-        return [dict(r) for r in con.execute(q, args)]
+        rows = [dict(r) for r in con.execute(q, args)]
+
+    # Add human-friendly ts_fmt in Python
+    out = []
+    for r in rows:
+        raw = r.get("ts", "")
+        # normalize like 2025-08-19T19:14:47 (drop microseconds if present)
+        base = raw.split(".")[0]
+        # allow both "YYYY-MM-DDTHH:MM:SS" and "YYYY-MM-DD HH:MM:SS"
+        base = base.replace(" ", "T")
+        try:
+            dt = datetime.fromisoformat(base)
+            r["ts_fmt"] = dt.strftime("%Y-%m-%d %I:%M:%S %p")
+        except Exception:
+            # fallback: just show raw if parsing fails
+            r["ts_fmt"] = raw
+        out.append(r)
+
+    return out
+
 
 @app.route("/api/logs")
 def api_logs():
