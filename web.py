@@ -65,7 +65,7 @@ def home():
     return f"""
 <!doctype html><html><head>
 <meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
-<link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/css/bootstrap.min.css" rel="stylesheet">
+<link href="/static/bootstrap.min.css" rel="stylesheet">
 <title>PLC Logger UI</title>
 </head><body class="p-3">
 <div class="container-fluid">
@@ -176,7 +176,7 @@ def status_page():
     keys = ["connected","last_read_ok","consecutive_errors","last_read_epoch","last_flush_epoch","rows_written_last_flush"]
     rows = "".join([f"<tr><td>{k}</td><td>{s.get(k,'')}</td></tr>" for k in keys])
     return f"""<!doctype html><html><head>
-<meta charset="utf-8"><link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/css/bootstrap.min.css" rel="stylesheet">
+<meta charset="utf-8"><link href="/static/bootstrap.min.css" rel="stylesheet">
 <title>Status</title></head><body class="p-3">
 <div class="container">
 <h3>Logger Status</h3>
@@ -345,7 +345,7 @@ def setpoints():
     names_opts = "".join([f'<option value="{sp["name"]}">{sp["name"]}</option>' for sp in SETPOINTS])
 
     return f"""<!doctype html><html><head>
-<meta charset="utf-8"><link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/css/bootstrap.min.css" rel="stylesheet">
+<meta charset="utf-8"><link href="/static/bootstrap.min.css" rel="stylesheet">
 <title>Setpoints</title></head><body class="p-3">
 <div class="container">
   <h3>Setpoints</h3>
