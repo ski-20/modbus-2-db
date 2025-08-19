@@ -9,12 +9,19 @@ PLC_PORT   = 502
 SLAVE_ID   = 1
 
 DB = "/home/ele/plc_logger/plc.db"
+LOG_NAME = "modbus_logger"
+
+import logging
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s %(levelname)s %(message)s",
+)
+log = logging.getLogger(LOG_NAME)
 
 # "HL" => [%MWn=HI, %MWn+1=LO]; flip to "LH" if PLC uses low-word first
 WORD_ORDER = "HL"
 
 # ===== Status block (read every 0.5 s) =====
-# Pump 1 spans %MW400..%MW419, Pump 2 spans %MW420..%MW439
 P1_BASE = 400
 P2_BASE = 420
 
@@ -22,18 +29,15 @@ STATUS_WINDOW_START = 400
 STATUS_WINDOW_END   = 449
 STATUS_COUNT = STATUS_WINDOW_END - STATUS_WINDOW_START + 1
 
-# Per-pump OUT_DATAWORD (%MW) — SET THESE to your real addresses
 P1_OUT_WORD_MW = None   # e.g., 444
 P2_OUT_WORD_MW = None   # e.g., 446
 
-# System tag(s) — fixed cadence (independent of pumps)
 SYSTEM_TAGS = [
     {"name":"WetWellLevel", "mw":440, "type":"FLOAT32", "scale":1.0, "unit":"level"},
     {"name":"SYS1_OutDataWord", "mw":442, "type":"INT16", "unit":""},
 ]
-SYS_SEC    = 10.0   # system tags every 10 s
+SYS_SEC    = 10.0
 
-# Pump tag builder
 def pump_tags(base, pump_name):
     return [
         {"name":f"{pump_name}_DrvStatusWord", "mw":base+0,  "type":"UINT16", "unit":""},
@@ -46,19 +50,17 @@ def pump_tags(base, pump_name):
         {"name":f"{pump_name}_FaultPrev",     "mw":base+7,  "type":"UINT16", "unit":""},
         {"name":f"{pump_name}_Starts",        "mw":base+8,  "type":"INT32",  "unit":""},
         {"name":f"{pump_name}_Hours_x10",     "mw":base+10, "type":"INT32",  "unit":"tenth_hr"},
-        {"name":f"{pump_name}_Status",        "mw":base+12, "type":"UINT16", "unit":""},   # 1 = running
+        {"name":f"{pump_name}_Status",        "mw":base+12, "type":"UINT16", "unit":""},
         {"name":f"{pump_name}_Mode",          "mw":base+13, "type":"UINT16", "unit":""},
         {"name":f"{pump_name}_OutDataWord",   "mw":base+14, "type":"UINT16", "unit":""},
     ]
 
-
 P1_TAGS = pump_tags(P1_BASE, "P1")
 P2_TAGS = pump_tags(P2_BASE, "P2")
 
-# Logging policy for pumps
-FAST_SEC   = 1.0     # fast log cadence when that pump is running
-SLOW_SEC   = 600.0   # slow log cadence when that pump is idle (10 min)
-SAMPLE_SEC = 0.5     # Modbus sample cadence
+FAST_SEC   = 1.0
+SLOW_SEC   = 600.0
+SAMPLE_SEC = 0.5
 
 # ===== Setpoints block (for web API) =====
 SETPOINTS = [
@@ -121,6 +123,26 @@ def write_rows(rows):
     cur.executemany("INSERT INTO logs (ts, tag, value, unit) VALUES (?,?,?,?)", rows)
     con.commit(); con.close()
 
+# --- State helpers ---
+def set_state(key, value):
+    con = sqlite3.connect(DB, timeout=30)
+    cur = con.cursor()
+    cur.execute("""
+        INSERT INTO state(key, value) VALUES(?,?)
+        ON CONFLICT(key) DO UPDATE SET value=excluded.value
+    """, (key, float(value)))
+    con.commit(); con.close()
+
+def set_state_many(pairs):
+    if not pairs: return
+    con = sqlite3.connect(DB, timeout=30)
+    cur = con.cursor()
+    cur.executemany("""
+        INSERT INTO state(key, value) VALUES(?,?)
+        ON CONFLICT(key) DO UPDATE SET value=excluded.value
+    """, [(k, float(v)) for k,v in pairs])
+    con.commit(); con.close()
+
 # ------------- Modbus helpers -------------
 def read_words(start_mw, count):
     cli = get_client()
@@ -155,7 +177,7 @@ def decode_in_status_window(words, mw, typ):
     raise ValueError(f"bad type {typ}")
 
 # ------------- Logging logic -------------
-last_log_time = {}   # per-tag last write time (epoch seconds)
+last_log_time = {}
 def due(tag_name, now_s, period_s):
     return (now_s - last_log_time.get(tag_name, 0.0)) >= period_s
 def mark_logged(tag_name, now_s):
@@ -170,23 +192,20 @@ def read_tag_from_words(words, tag):
 def main():
     ensure_schema()
     pending, last_flush = [], time.time()
+    consecutive_errors = 0
 
     while True:
         try:
-            # Read %MW400..%MW449 once per cycle
             words = read_words(STATUS_WINDOW_START, STATUS_COUNT)
             now_iso = datetime.utcnow().isoformat()
             now_s   = time.time()
 
-            # Running status (1 = running)
             p1_status = int(read_tag_from_words(words, {"mw":P1_BASE+12,"type":"UINT16"}) or 0)
             p2_status = int(read_tag_from_words(words, {"mw":P2_BASE+12,"type":"UINT16"}) or 0)
 
-            # Per-pump cadence
             p1_cad = FAST_SEC if p1_status == 1 else SLOW_SEC
             p2_cad = FAST_SEC if p2_status == 1 else SLOW_SEC
 
-            # Log pump 1
             for t in P1_TAGS:
                 v = read_tag_from_words(words, t)
                 if v is None: continue
@@ -194,7 +213,6 @@ def main():
                     pending.append((now_iso, t["name"], float(v), t.get("unit","")))
                     mark_logged(t["name"], now_s)
 
-            # Log pump 2
             for t in P2_TAGS:
                 v = read_tag_from_words(words, t)
                 if v is None: continue
@@ -202,7 +220,6 @@ def main():
                     pending.append((now_iso, t["name"], float(v), t.get("unit","")))
                     mark_logged(t["name"], now_s)
 
-            # Log system tags at fixed 10 s cadence
             for t in SYSTEM_TAGS:
                 v = read_tag_from_words(words, t)
                 if v is None: continue
@@ -210,15 +227,30 @@ def main():
                     pending.append((now_iso, t["name"], float(v), t.get("unit","")))
                     mark_logged(t["name"], now_s)
 
-            # Batch flush ~1 Hz
             if time.time() - last_flush >= 1.0 and pending:
                 write_rows(pending)
+                set_state_many([
+                    ("connected", 1),
+                    ("last_read_ok", 1),
+                    ("consecutive_errors", consecutive_errors),
+                    ("last_read_epoch", now_s),
+                    ("last_flush_epoch", time.time()),
+                    ("rows_written_last_flush", len(pending)),
+                ])
                 pending.clear()
                 last_flush = time.time()
 
+            consecutive_errors = 0
             time.sleep(SAMPLE_SEC)
 
-        except Exception:
+        except Exception as e:
+            log.warning("Read error: %s", e)
+            consecutive_errors += 1
+            set_state_many([
+                ("connected", 0),
+                ("last_read_ok", 0),
+                ("consecutive_errors", consecutive_errors),
+            ])
             time.sleep(0.5)
             with _client_lock:
                 if _client:
