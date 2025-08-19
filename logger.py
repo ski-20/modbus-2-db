@@ -6,7 +6,7 @@ from pymodbus.client import ModbusTcpClient
 # ------------------ CONFIG ------------------
 PLC_IP     = "10.0.0.1"
 PLC_PORT   = 502
-SLAVE_ID   = 0
+SLAVE_ID   = 1
 
 DB = "/home/ele/plc_logger/plc.db"
 LOG_NAME = "modbus_logger"
