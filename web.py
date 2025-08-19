@@ -2,6 +2,7 @@
 import sqlite3, time, csv, io, struct, math
 from flask import Flask, request, jsonify, make_response
 from datetime import datetime, timedelta
+from typing import Optional
 
 # ======= CONFIG (keep in sync with logger.py) =======
 DB = "/home/ele/plc_logger/plc.db"
@@ -157,7 +158,7 @@ def status_page():
 </div></body></html>"""
 
 # ---------- Logs API with optional bucketing ----------
-def _query_logs(tag:str, mins:int, limit:int, bucket_s:int|None):
+def _query_logs(tag: str, mins: int, limit: int, bucket_s: Optional[int]):
     since_ts = (datetime.utcnow() - timedelta(minutes=mins)).isoformat()
 
     if bucket_s and bucket_s > 0:
