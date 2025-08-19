@@ -49,7 +49,6 @@ def list_tags():
 
 # ---------- Basic pages ----------
 @app.route("/")
-@app.route("/")
 def home():
     # read current query (so we can keep selections on refresh)
     cur_tag  = request.args.get("tag", "").strip()
@@ -139,6 +138,7 @@ loadTable();
 </script>
 </body></html>
 """
+
 
 # ---------- Status ----------
 def _read_state():
