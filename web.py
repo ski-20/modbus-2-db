@@ -190,7 +190,6 @@ def _query_logs(tag: str, mins: int, limit: int, bucket_s: Optional[int]):
     since_ts = (datetime.utcnow() - timedelta(minutes=mins)).isoformat()
 
     if bucket_s and bucket_s > 0:
-        # bucket to whole seconds (or N seconds) first, then format for display
         q = """
         WITH rows AS (
           SELECT substr(ts,1,19) AS s, tag, value, unit
@@ -218,7 +217,7 @@ def _query_logs(tag: str, mins: int, limit: int, bucket_s: Optional[int]):
         q = """
         SELECT
           ts,
-          strftime('%Y-%m-%d %I:%M:%S %p', replace(ts,'T',' ')) AS ts_fmt,
+          strftime('%Y-%m-%d %I:%M:%S %p', replace(substr(ts,1,19),'T',' ')) AS ts_fmt,
           tag, value, unit
         FROM logs
         WHERE ts >= ?
