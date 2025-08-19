@@ -50,14 +50,13 @@ def list_tags():
 # ---------- Basic pages ----------
 @app.route("/")
 def home():
-    # read current query (so we can keep selections on refresh)
-    cur_tag  = request.args.get("tag", "").strip()
-    cur_mins = request.args.get("mins", "60")
-    cur_limit = request.args.get("limit", "500")
+    # keep selections on refresh
+    cur_tag    = request.args.get("tag", "").strip()
+    cur_mins   = request.args.get("mins", "60")
+    cur_limit  = request.args.get("limit", "500")
     cur_bucket = request.args.get("bucket_s", "")
 
     tags = list_tags()
-
     options = ['<option value="">(all)</option>'] + [
         f'<option value="{t}" {"selected" if t==cur_tag else ""}>{t}</option>'
         for t in tags
@@ -122,18 +121,22 @@ async function loadTable() {{
   dl.href = '/api/download.csv?' + p.toString();
   const r = await fetch('/api/logs?' + p.toString());
   const rows = await r.json();
-  tbody.innerHTML = rows.map(r =>
-    `<tr><td>${r.ts}</td><td>${r.tag}</td><td>${r.value}</td><td>${r.unit||''}</td></tr>`
-  ).join('');
+  tbody.innerHTML = rows.map(function(row) {{
+    return '<tr>'
+      + '<td>' + row.ts   + '</td>'
+      + '<td>' + row.tag  + '</td>'
+      + '<td>' + row.value + '</td>'
+      + '<td>' + (row.unit || '') + '</td>'
+      + '</tr>';
+  }}).join('');
 }}
 
-// submit handler
-f.addEventListener('submit', (e) => {{
+f.addEventListener('submit', function(e) {{
   e.preventDefault();
   loadTable();
 }});
 
-// auto-load with current selections on first paint
+// auto-load on first paint
 loadTable();
 </script>
 </body></html>
