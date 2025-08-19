@@ -123,7 +123,7 @@ async function loadTable() {{
   const rows = await r.json();
   tbody.innerHTML = rows.map(function(row) {{
     return '<tr>'
-      + '<td>' + row.ts   + '</td>'
+      + '<td>' + (row.ts_fmt || row.ts) + '</td>'
       + '<td>' + row.tag  + '</td>'
       + '<td>' + row.value + '</td>'
       + '<td>' + (row.unit || '') + '</td>'
@@ -190,20 +190,24 @@ def _query_logs(tag: str, mins: int, limit: int, bucket_s: Optional[int]):
     since_ts = (datetime.utcnow() - timedelta(minutes=mins)).isoformat()
 
     if bucket_s and bucket_s > 0:
-        # bucket by second (or N seconds) using integer epoch
-        # ts is ISO text; convert to epoch via strftime on the DB side isn’t trivial,
-        # so we approximate by truncating to seconds with substr and then aggregate avg(value)
-        # Note: This groups by second; to widen to N seconds, group on integer second // bucket_s
+        # bucket to whole seconds (or N seconds) first, then format for display
         q = """
         WITH rows AS (
           SELECT substr(ts,1,19) AS s, tag, value, unit
           FROM logs
           WHERE ts >= ?
           {tag_clause}
+        ),
+        agg AS (
+          SELECT s, tag, avg(value) AS value, MAX(unit) AS unit
+          FROM rows
+          GROUP BY tag, s
         )
-        SELECT s AS ts, tag, avg(value) AS value, MAX(unit) AS unit
-        FROM rows
-        GROUP BY tag, s
+        SELECT
+          s AS ts,
+          strftime('%Y-%m-%d %I:%M:%S %p', replace(s,'T',' ')) AS ts_fmt,
+          tag, value, unit
+        FROM agg
         ORDER BY ts DESC
         LIMIT ?
         """
@@ -212,7 +216,10 @@ def _query_logs(tag: str, mins: int, limit: int, bucket_s: Optional[int]):
         args = [since_ts] + ([tag] if tag else []) + [limit]
     else:
         q = """
-        SELECT ts, tag, value, unit
+        SELECT
+          ts,
+          strftime('%Y-%m-%d %I:%M:%S %p', replace(ts,'T',' ')) AS ts_fmt,
+          tag, value, unit
         FROM logs
         WHERE ts >= ?
         {tag_clause}
