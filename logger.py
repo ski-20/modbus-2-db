@@ -8,7 +8,7 @@ PLC_IP     = "10.0.0.1"
 PLC_PORT   = 502
 SLAVE_ID   = 1
 
-DB = "/opt/plc_logger/plc.db"
+DB = "/home/ele/plc_logger/plc.db"
 
 # "HL" => [%MWn=HI, %MWn+1=LO]; flip to "LH" if PLC uses low-word first
 WORD_ORDER = "HL"
