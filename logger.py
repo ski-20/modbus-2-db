@@ -29,54 +29,57 @@ STATUS_WINDOW_START = 400
 STATUS_WINDOW_END   = 449
 STATUS_COUNT = STATUS_WINDOW_END - STATUS_WINDOW_START + 1
 
+# Per-pump OUT_DATAWORD placeholders (not used but kept for completeness)
 P1_OUT_WORD_MW = None
 P2_OUT_WORD_MW = None
 
-SYSTEM_TAGS = [
-    {"name":"WetWellLevel", "mw":440, "type":"FLOAT32", "scale":1.0, "unit":"level"},
-    {"name":"SYS1_OutDataWord", "mw":442, "type":"INT16", "unit":""},
-]
-SYS_SEC    = 10.0
-
-def pump_tags(base, pump_name):
+# ---------- Tag definitions (with labels) ----------
+def pump_tags(base: int, pump_key: str, pump_label: str):
     return [
-        {"name":f"{pump_name}_DrvStatusWord", "mw":base+0,  "type":"UINT16", "unit":""},
-        {"name":f"{pump_name}_SpeedRaw",      "mw":base+1,  "type":"INT16",  "unit":"raw"},
-        {"name":f"{pump_name}_MotorCurrent",  "mw":base+2,  "type":"INT16",  "scale":0.1, "unit":"A"},
-        {"name":f"{pump_name}_DCBusV",        "mw":base+3,  "type":"INT16",  "unit":"V"},
-        {"name":f"{pump_name}_OutV",          "mw":base+4,  "type":"INT16",  "unit":"V"},
-        {"name":f"{pump_name}_TorqueRaw",     "mw":base+5,  "type":"INT16",  "unit":"raw"},
-        {"name":f"{pump_name}_FaultActive",   "mw":base+6,  "type":"UINT16", "unit":""},
-        {"name":f"{pump_name}_FaultPrev",     "mw":base+7,  "type":"UINT16", "unit":""},
-        {"name":f"{pump_name}_Starts",        "mw":base+8,  "type":"INT32",  "unit":""},
-        {"name":f"{pump_name}_Hours_x10",     "mw":base+10, "type":"INT32",  "unit":"tenth_hr"},
-        {"name":f"{pump_name}_Status",        "mw":base+12, "type":"UINT16", "unit":""},
-        {"name":f"{pump_name}_Mode",          "mw":base+13, "type":"UINT16", "unit":""},
-        {"name":f"{pump_name}_OutDataWord",   "mw":base+14, "type":"UINT16", "unit":""},
+        {"name":f"{pump_key}_DrvStatusWord", "label":f"{pump_label} Drive Status Word",         "mw":base+0,  "type":"UINT16", "unit":""},
+        {"name":f"{pump_key}_SpeedRaw",      "label":f"{pump_label} Speed (raw)",               "mw":base+1,  "type":"INT16",  "unit":"raw"},
+        {"name":f"{pump_key}_MotorCurrent",  "label":f"{pump_label} Motor Current",             "mw":base+2,  "type":"INT16",  "scale":0.1, "unit":"A"},
+        {"name":f"{pump_key}_DCBusV",        "label":f"{pump_label} DC Bus Voltage",            "mw":base+3,  "type":"INT16",  "unit":"V"},
+        {"name":f"{pump_key}_OutV",          "label":f"{pump_label} Output Voltage",            "mw":base+4,  "type":"INT16",  "unit":"V"},
+        {"name":f"{pump_key}_TorqueRaw",     "label":f"{pump_label} Torque (raw)",              "mw":base+5,  "type":"INT16",  "unit":"raw"},
+        {"name":f"{pump_key}_FaultActive",   "label":f"{pump_label} Active Fault",              "mw":base+6,  "type":"UINT16", "unit":""},
+        {"name":f"{pump_key}_FaultPrev",     "label":f"{pump_label} Previous Fault",            "mw":base+7,  "type":"UINT16", "unit":""},
+        {"name":f"{pump_key}_Starts",        "label":f"{pump_label} Total Starts",              "mw":base+8,  "type":"INT32",  "unit":""},
+        {"name":f"{pump_key}_Hours_x10",     "label":f"{pump_label} Total Hours (x10)",         "mw":base+10, "type":"INT32",  "unit":"tenth_hr"},
+        {"name":f"{pump_key}_Status",        "label":f"{pump_label} Status (1=Running)",        "mw":base+12, "type":"UINT16", "unit":""},
+        {"name":f"{pump_key}_Mode",          "label":f"{pump_label} Mode",                      "mw":base+13, "type":"UINT16", "unit":""},
+        {"name":f"{pump_key}_OutDataWord",   "label":f"{pump_label} Output Data Word",          "mw":base+14, "type":"UINT16", "unit":""},
     ]
 
-P1_TAGS = pump_tags(P1_BASE, "P1")
-P2_TAGS = pump_tags(P2_BASE, "P2")
+P1_TAGS = pump_tags(P1_BASE, "P1", "Pump 1")
+P2_TAGS = pump_tags(P2_BASE, "P2", "Pump 2")
 
-FAST_SEC   = 1.0
-SLOW_SEC   = 600.0
-SAMPLE_SEC = 0.5
+SYSTEM_TAGS = [
+    {"name":"WetWellLevel",     "label":"Wet Well Level",           "mw":440, "type":"FLOAT32", "scale":1.0, "unit":"level"},
+    {"name":"SYS1_OutDataWord", "label":"System Output Data Word",  "mw":442, "type":"INT16",               "unit":""},
+]
+SYS_SEC    = 10.0   # system tags every 10 s
+
+# Logging policy for pumps
+FAST_SEC   = 1.0     # fast log cadence when that pump is running
+SLOW_SEC   = 600.0   # slow log cadence when that pump is idle (10 min)
+SAMPLE_SEC = 0.5     # Modbus sample cadence
 
 # ===== Setpoints block (for web API) =====
 SETPOINTS = [
-    {"name":"WetWell_Stop_Level",          "mw":300, "type":"FLOAT32"},
-    {"name":"WetWell_Lead_Start_Level",    "mw":302, "type":"FLOAT32"},
-    {"name":"WetWell_Lag_Start_Level",     "mw":304, "type":"FLOAT32"},
-    {"name":"WetWell_High_Level",          "mw":306, "type":"FLOAT32"},
-    {"name":"WetWell_Level_Scale_0V",      "mw":308, "type":"FLOAT32"},
-    {"name":"WetWell_Level_Scale_10V",     "mw":310, "type":"FLOAT32"},
-    {"name":"Spare_Analog_IO_1",           "mw":312, "type":"FLOAT32"},
-    {"name":"Spare_Analog_IO_2",           "mw":314, "type":"FLOAT32"},
-    {"name":"Pump1_Speed_Setpoint_pct",    "mw":316, "type":"FLOAT32"},
-    {"name":"Pump2_Speed_Setpoint_pct",    "mw":318, "type":"FLOAT32"},
-    {"name":"Pump1_FailToRun_Delay_sec",   "mw":320, "type":"INT16"},
-    {"name":"Pump2_FailToRun_Delay_sec",   "mw":321, "type":"INT16"},
-    {"name":"Spare_Analog_IO_HighLevel",   "mw":322, "type":"FLOAT32"},
+    {"name":"WetWell_Stop_Level",        "label":"Wet Well Stop Level",                 "mw":300, "type":"FLOAT32"},
+    {"name":"WetWell_Lead_Start_Level",  "label":"Wet Well Lead Pump Start Level",      "mw":302, "type":"FLOAT32"},
+    {"name":"WetWell_Lag_Start_Level",   "label":"Wet Well Lag Pump Start Level",       "mw":304, "type":"FLOAT32"},
+    {"name":"WetWell_High_Level",        "label":"Wet Well High Level",                 "mw":306, "type":"FLOAT32"},
+    {"name":"WetWell_Level_Scale_0V",    "label":"Wet Well Level Scaling - 0V",         "mw":308, "type":"FLOAT32"},
+    {"name":"WetWell_Level_Scale_10V",   "label":"Wet Well Level Scaling - 10V",        "mw":310, "type":"FLOAT32"},
+    {"name":"Spare_Analog_IO_1",         "label":"Spare (future analog IO) 1",          "mw":312, "type":"FLOAT32"},
+    {"name":"Spare_Analog_IO_2",         "label":"Spare (future analog IO) 2",          "mw":314, "type":"FLOAT32"},
+    {"name":"Pump1_Speed_Setpoint_pct",  "label":"Pump 1 Speed Setpoint (%)",           "mw":316, "type":"FLOAT32"},
+    {"name":"Pump2_Speed_Setpoint_pct",  "label":"Pump 2 Speed Setpoint (%)",           "mw":318, "type":"FLOAT32"},
+    {"name":"Pump1_FailToRun_Delay_sec", "label":"Pump 1 Fail To Run Delay (sec.)",     "mw":320, "type":"INT16"},
+    {"name":"Pump2_FailToRun_Delay_sec", "label":"Pump 2 Fail To Run Delay (sec.)",     "mw":321, "type":"INT16"},
+    {"name":"Spare_Analog_IO_HighLevel", "label":"Spare (future analog IO) High Level", "mw":322, "type":"FLOAT32"},
 ]
 SETPOINT_WINDOW_START = 300
 SETPOINT_WINDOW_END   = 323
@@ -90,7 +93,7 @@ def get_client():
     global _client
     with _client_lock:
         if _client is None:
-            # KEY FIX: use keyword args so pymodbus 3.x doesn't error on __init__
+            # keyword args for pymodbus 3.x
             _client = ModbusTcpClient(host=PLC_IP, port=PLC_PORT, timeout=2)
         connected = getattr(_client, "connected", None)
         if connected is None:
@@ -106,7 +109,7 @@ def get_client():
 def ensure_schema():
     con = sqlite3.connect(DB)
     cur = con.cursor()
-    # Better concurrency & fewer lock errors
+    # Concurrency / durability
     cur.execute("PRAGMA journal_mode=WAL;")
     cur.execute("PRAGMA busy_timeout=2000;")
     cur.execute("""
@@ -118,12 +121,31 @@ def ensure_schema():
       )
     """)
     cur.execute("CREATE INDEX IF NOT EXISTS idx_logs_tag_ts ON logs(tag, ts)")
+    # health/status
     cur.execute("""
       CREATE TABLE IF NOT EXISTS state (
         key TEXT PRIMARY KEY,
         value REAL
       )
     """)
+    # NEW: tag metadata (stable key + pretty label + unit)
+    cur.execute("""
+      CREATE TABLE IF NOT EXISTS tag_meta (
+        name  TEXT PRIMARY KEY,
+        label TEXT,
+        unit  TEXT
+      )
+    """)
+    con.commit(); con.close()
+
+def upsert_tag_meta(tag_defs):
+    if not tag_defs: return
+    con = sqlite3.connect(DB, timeout=30)
+    cur = con.cursor()
+    cur.executemany("""
+      INSERT INTO tag_meta(name, label, unit) VALUES(?,?,?)
+      ON CONFLICT(name) DO UPDATE SET label=excluded.label, unit=excluded.unit
+    """, [(t["name"], t.get("label", t["name"]), t.get("unit","")) for t in tag_defs])
     con.commit(); con.close()
 
 def write_rows(rows):
@@ -134,32 +156,10 @@ def write_rows(rows):
     cur.executemany("INSERT INTO logs (ts, tag, value, unit) VALUES (?,?,?,?)", rows)
     con.commit(); con.close()
 
-# --- State helpers ---
-def set_state(key, value):
-    con = sqlite3.connect(DB, timeout=30)
-    cur = con.cursor()
-    cur.execute("""
-        INSERT INTO state(key, value) VALUES(?,?)
-        ON CONFLICT(key) DO UPDATE SET value=excluded.value
-    """, (key, float(value)))
-    con.commit(); con.close()
-
-def set_state_many(pairs):
-    if not pairs: return
-    con = sqlite3.connect(DB, timeout=30)
-    cur = con.cursor()
-    cur.executemany("""
-        INSERT INTO state(key, value) VALUES(?,?)
-        ON CONFLICT(key) DO UPDATE SET value=excluded.value
-    """, [(k, float(v)) for k, v in pairs])
-    con.commit(); con.close()
-
 # ------------- Modbus helpers -------------
 def read_words(start_mw, count):
     cli = get_client()
-    # Back to original: use slave= (and keyword args for address/count)
     rr = cli.read_holding_registers(address=start_mw, count=count, slave=SLAVE_ID)
-    # Surface Modbus exceptions clearly
     if hasattr(rr, "isError") and rr.isError():
         fc = getattr(rr, "function_code", None)
         ec = getattr(rr, "exception_code", None)
@@ -195,7 +195,7 @@ def decode_in_status_window(words, mw, typ):
     raise ValueError(f"bad type {typ}")
 
 # ------------- Logging logic -------------
-last_log_time = {}
+last_log_time = {}   # per-tag last write time (epoch seconds)
 def due(tag_name, now_s, period_s):
     return (now_s - last_log_time.get(tag_name, 0.0)) >= period_s
 def mark_logged(tag_name, now_s):
@@ -209,6 +209,11 @@ def read_tag_from_words(words, tag):
 
 def main():
     ensure_schema()
+
+    # one-time publish of metadata so the web UI can read labels/units
+    all_tags = P1_TAGS + P2_TAGS + SYSTEM_TAGS + SETPOINTS
+    upsert_tag_meta(all_tags)
+
     pending, last_flush = [], time.time()
     consecutive_errors = 0
     error_backoff_min = 0.5
@@ -220,12 +225,13 @@ def main():
             now_iso = datetime.utcnow().isoformat()
             now_s   = time.time()
 
+            # determine pump run/idle
             p1_status = int(read_tag_from_words(words, {"mw":P1_BASE+12,"type":"UINT16"}) or 0)
             p2_status = int(read_tag_from_words(words, {"mw":P2_BASE+12,"type":"UINT16"}) or 0)
-
             p1_cad = FAST_SEC if p1_status == 1 else SLOW_SEC
             p2_cad = FAST_SEC if p2_status == 1 else SLOW_SEC
 
+            # pump 1
             for t in P1_TAGS:
                 v = read_tag_from_words(words, t)
                 if v is None: continue
@@ -233,6 +239,7 @@ def main():
                     pending.append((now_iso, t["name"], float(v), t.get("unit","")))
                     mark_logged(t["name"], now_s)
 
+            # pump 2
             for t in P2_TAGS:
                 v = read_tag_from_words(words, t)
                 if v is None: continue
@@ -240,6 +247,7 @@ def main():
                     pending.append((now_iso, t["name"], float(v), t.get("unit","")))
                     mark_logged(t["name"], now_s)
 
+            # system tags fixed cadence
             for t in SYSTEM_TAGS:
                 v = read_tag_from_words(words, t)
                 if v is None: continue
@@ -247,16 +255,25 @@ def main():
                     pending.append((now_iso, t["name"], float(v), t.get("unit","")))
                     mark_logged(t["name"], now_s)
 
+            # flush roughly once per second
             if time.time() - last_flush >= 1.0 and pending:
                 write_rows(pending)
-                set_state_many([
+                set_state_many = [
                     ("connected", 1),
                     ("last_read_ok", 1),
                     ("consecutive_errors", consecutive_errors),
                     ("last_read_epoch", now_s),
                     ("last_flush_epoch", time.time()),
                     ("rows_written_last_flush", len(pending)),
-                ])
+                ]
+                # write to state
+                con = sqlite3.connect(DB, timeout=30); cur = con.cursor()
+                cur.executemany("""
+                    INSERT INTO state(key, value) VALUES(?,?)
+                    ON CONFLICT(key) DO UPDATE SET value=excluded.value
+                """, [(k, float(v)) for k, v in set_state_many])
+                con.commit(); con.close()
+
                 pending.clear()
                 last_flush = time.time()
 
@@ -271,14 +288,17 @@ def main():
             if consecutive_errors in (1, 5) or consecutive_errors % 20 == 0:
                 log.warning(f"Modbus read error (#{consecutive_errors}): {e} — backing off {backoff:.2f}s")
 
-            set_state_many([
-                ("connected", 0),
-                ("last_read_ok", 0),
-                ("consecutive_errors", consecutive_errors),
-            ])
+            # update state on error
+            con = sqlite3.connect(DB, timeout=30); cur = con.cursor()
+            cur.executemany("""
+                INSERT INTO state(key, value) VALUES(?,?)
+                ON CONFLICT(key) DO UPDATE SET value=excluded.value
+            """, [("connected", 0), ("last_read_ok", 0), ("consecutive_errors", consecutive_errors)])
+            con.commit(); con.close()
 
             time.sleep(backoff)
 
+            # force reconnect
             with _client_lock:
                 if _client:
                     try: _client.close()

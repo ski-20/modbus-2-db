@@ -1,21 +1,19 @@
 #!/usr/bin/env python3
 import sqlite3, time, csv, io, struct, math
 from flask import Flask, request, jsonify, make_response
-from datetime import datetime, timedelta
-from typing import Optional
 from datetime import datetime, timedelta, timezone
-
-try:
-    from zoneinfo import ZoneInfo         # Python 3.9+
-    LOCAL_TZ = ZoneInfo("America/New_York")
-except Exception:
-    # Fallback if zoneinfo isn't available
-    from dateutil import tz
-    LOCAL_TZ = tz.gettz("America/New_York")
-
+from typing import Optional
 
 # ======= CONFIG (keep in sync with logger.py) =======
 DB = "/home/ele/plc_logger/plc.db"
+
+# Timezone for display (DB stays UTC)
+try:
+    from zoneinfo import ZoneInfo   # Python 3.9+
+    LOCAL_TZ = ZoneInfo("America/Chicago")   # change to America/New_York if desired
+except Exception:
+    from dateutil import tz
+    LOCAL_TZ = tz.gettz("America/Chicago")
 
 # Modbus setpoint write support (optional)
 USE_MODBUS = True
@@ -42,51 +40,9 @@ SETPOINTS = [
 SETPOINT_WINDOW_START = 300
 SETPOINT_WINDOW_END   = 323
 SETPOINT_COUNT = SETPOINT_WINDOW_END - SETPOINT_WINDOW_START + 1
-
-# Human-friendly labels for tags in the logs table.
-# LEFT SIDE: internal name as stored in DB
-# RIGHT SIDE: pretty label for UI
-TAG_LABELS = {
-    # --- Setpoints ---
-    "WetWell_Stop_Level": "Wet Well Stop Level",
-    "WetWell_Lead_Start_Level": "Wet Well Lead Pump Start Level",
-    "WetWell_Lag_Start_Level": "Wet Well Lag Pump Start Level",
-    "WetWell_High_Level": "Wet Well High Level",
-    "WetWell_Level_Scale_0V": "Wet Well Level Scaling – 0 V",
-    "WetWell_Level_Scale_10V": "Wet Well Level Scaling – 10 V",
-    "Spare_Analog_IO_1": "Spare Analog IO 1",
-    "Spare_Analog_IO_2": "Spare Analog IO 2",
-    "Pump1_Speed_Setpoint_pct": "Pump 1 Speed Setpoint (%)",
-    "Pump2_Speed_Setpoint_pct": "Pump 2 Speed Setpoint (%)",
-    "Pump1_FailToRun_Delay_sec": "Pump 1 Fail-To-Run Delay (s)",
-    "Pump2_FailToRun_Delay_sec": "Pump 2 Fail-To-Run Delay (s)",
-    "Spare_Analog_IO_HighLevel": "Spare Analog IO High Level",
-
-    # --- Examples for status tags (add all you care about) ---
-    "P1_DrvStatusWord": "Pump 1 Drive Status Word",
-    "P1_SpeedRaw": "Pump 1 Speed (raw)",
-    "P1_MotorCurrent": "Pump 1 Motor Current (A)",
-    "P1_DCBusV": "Pump 1 DC Bus Voltage (V)",
-    "P1_OutV": "Pump 1 Output Voltage (V)",
-    "P1_TorqueRaw": "Pump 1 Torque (raw)",
-    "P1_FaultActive": "Pump 1 Active Fault",
-    "P1_FaultPrev": "Pump 1 Previous Fault",
-    "P1_Starts": "Pump 1 Total Starts",
-    "P1_Hours_x10": "Pump 1 Total Hours (x10)",
-    "P1_Status": "Pump 1 Status (1=Running)",
-    "P1_Mode": "Pump 1 Mode",
-    "P1_OutDataWord": "Pump 1 Output Data Word",
-
-    "P2_DrvStatusWord": "Pump 2 Drive Status Word",
-    "P2_MotorCurrent": "Pump 2 Motor Current (A)",
-    # ...continue for the P2_* tags you use...
-    "WetWellLevel": "Wet Well Level",
-    "SYS1_OutDataWord": "System Output Data Word",
-}
-
 # =====================================================
 
-app = Flask(__name__)
+app = Flask(__name__, static_folder="static", static_url_path="/static")
 
 # ---------- DB helpers ----------
 def db():
@@ -99,6 +55,11 @@ def list_tags():
     with db() as con:
         return [r["tag"] for r in con.execute("SELECT DISTINCT tag FROM logs ORDER BY tag")]
 
+def tag_label_map():
+    """Read pretty labels from logger-published tag_meta."""
+    with db() as con:
+        return {r["name"]: (r["label"] or r["name"]) for r in con.execute("SELECT name, label FROM tag_meta")}
+
 # ---------- Basic pages ----------
 @app.route("/")
 def home():
@@ -109,12 +70,12 @@ def home():
     cur_bucket = request.args.get("bucket_s", "")
 
     tags = list_tags()
+    labels = tag_label_map()
     options = ['<option value="">(all)</option>']
     for t in tags:
-        label = TAG_LABELS.get(t, t)
+        label = labels.get(t, t)
         sel = "selected" if t == cur_tag else ""
         options.append(f'<option value="{t}" {sel}>{label}</option>')
-
 
     return f"""
 <!doctype html><html><head>
@@ -178,24 +139,17 @@ async function loadTable() {{
   tbody.innerHTML = rows.map(function(row) {{
     return '<tr>'
       + '<td>' + (row.ts_fmt || row.ts) + '</td>'
-      + '<td>' + row.tag_label  + '</td>'
+      + '<td>' + (row.tag_label || row.tag) + '</td>'
       + '<td>' + row.value + '</td>'
       + '<td>' + (row.unit || '') + '</td>'
       + '</tr>';
   }}).join('');
 }}
-
-f.addEventListener('submit', function(e) {{
-  e.preventDefault();
-  loadTable();
-}});
-
-// auto-load on first paint
+f.addEventListener('submit', function(e) {{ e.preventDefault(); loadTable(); }});
 loadTable();
 </script>
 </body></html>
 """
-
 
 # ---------- Status ----------
 def _read_state():
@@ -208,19 +162,22 @@ def _read_state():
 @app.route("/status")
 def status_json():
     s = _read_state()
-    def fmt(t):
-        try: return time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(float(t)))
-        except: return None
+    def fmt(ts):
+        try:
+            dt = datetime.fromtimestamp(float(ts), tz=timezone.utc).astimezone(LOCAL_TZ)
+            return dt.strftime("%Y-%m-%d %I:%M:%S %p")
+        except:
+            return None
     out = {
         "connected": int(s.get("connected", 0)),
         "last_read_ok": int(s.get("last_read_ok", 0)),
         "consecutive_errors": int(s.get("consecutive_errors", 0)),
         "last_read_epoch": s.get("last_read_epoch"),
-        "last_read_utc": fmt(s.get("last_read_epoch")),
+        "last_read_local": fmt(s.get("last_read_epoch")),
         "last_flush_epoch": s.get("last_flush_epoch"),
-        "last_flush_utc": fmt(s.get("last_flush_epoch")),
+        "last_flush_local": fmt(s.get("last_flush_epoch")),
         "rows_written_last_flush": int(s.get("rows_written_last_flush", 0)),
-        "server_time_utc": fmt(time.time()),
+        "server_time_local": fmt(time.time()),
     }
     return jsonify(out)
 
@@ -280,11 +237,12 @@ def _query_logs(tag: str, mins: int, limit: int, bucket_s: Optional[int]):
     with db() as con:
         rows = [dict(r) for r in con.execute(q, args)]
 
-    # Add human-friendly ts_fmt in Python
+    # Add human-friendly ts_fmt in Python + tag_label from tag_meta
+    labels = tag_label_map()
     out = []
     for r in rows:
         raw = r.get("ts", "")
-        base = raw.split(".")[0].replace(" ", "T")  # 'YYYY-MM-DDTHH:MM:SS'
+        base = raw.split(".")[0].replace(" ", "T")
         try:
             dt = datetime.fromisoformat(base)
             if dt.tzinfo is None:
@@ -293,14 +251,9 @@ def _query_logs(tag: str, mins: int, limit: int, bucket_s: Optional[int]):
             r["ts_fmt"] = dt_local.strftime("%Y-%m-%d %I:%M:%S %p")
         except Exception:
             r["ts_fmt"] = raw
-
-        # attach tag_label
-        r["tag_label"] = TAG_LABELS.get(r["tag"], r["tag"])
-
+        r["tag_label"] = labels.get(r["tag"], r["tag"])
         out.append(r)
     return out
-
-
 
 @app.route("/api/logs")
 def api_logs():
@@ -374,6 +327,7 @@ def read_setpoint_block():
 @app.route("/setpoints", methods=["GET","POST"])
 def setpoints():
     msg = ""
+    labels = tag_label_map()
     if request.method == "POST":
         if not USE_MODBUS:
             return make_response("Modbus not enabled on server", 500)
@@ -396,7 +350,7 @@ def setpoints():
                     hi, lo = float_to_words(fval)
                     r = c.write_registers(address=sp["mw"], values=[hi, lo], slave=SLAVE_ID)
                     ok = not (hasattr(r,"isError") and r.isError())
-                msg = f"Updated {name}" if ok else f"Write failed for {name}"
+                msg = f"Updated {labels.get(name,name)}" if ok else f"Write failed for {labels.get(name,name)}"
             except Exception as e:
                 msg = f"Write exception: {e}"
 
@@ -417,13 +371,13 @@ def setpoints():
     else:
         msg = emsg or msg or "Unable to read setpoints."
 
-    table_rows = "".join([
-        f"<tr><td>{TAG_LABELS.get(n, n)}</td><td>%MW{mw}</td><td>{typ}</td><td>{val}</td></tr>"
-        for (n, mw, typ, val) in rows
-    ])
     names_opts = "".join([
-        f'<option value="{sp["name"]}">{TAG_LABELS.get(sp["name"], sp["name"])}</option>'
+        f'<option value="{sp["name"]}">{labels.get(sp["name"], sp["name"])}</option>'
         for sp in SETPOINTS
+    ])
+    table_rows = "".join([
+        f"<tr><td>{labels.get(n,n)}</td><td>%MW{mw}</td><td>{typ}</td><td>{val}</td></tr>"
+        for (n,mw,typ,val) in rows
     ])
 
     return f"""<!doctype html><html><head>
@@ -465,12 +419,6 @@ def health():
         return "ok", 200
     except Exception as e:
         return f"db error: {e}", 500
-    
-@app.route("/tags")
-def tags():
-    with db() as con:
-        raw = [r["tag"] for r in con.execute("SELECT DISTINCT tag FROM logs ORDER BY tag")]
-    return jsonify([{"tag": t, "label": TAG_LABELS.get(t, t)} for t in raw])
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=8080)
