@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-import time, struct, sqlite3, threading
+import time, struct, sqlite3, threading, random
 from datetime import datetime
 from pymodbus.client import ModbusTcpClient
 
@@ -99,6 +99,9 @@ def get_client():
 def ensure_schema():
     con = sqlite3.connect(DB)
     cur = con.cursor()
+    # Better concurrency & fewer lock errors
+    cur.execute("PRAGMA journal_mode=WAL;")
+    cur.execute("PRAGMA busy_timeout=2000;")
     cur.execute("""
       CREATE TABLE IF NOT EXISTS logs (
         ts   TEXT NOT NULL,
@@ -120,6 +123,7 @@ def write_rows(rows):
     if not rows: return
     con = sqlite3.connect(DB, timeout=30)
     cur = con.cursor()
+    cur.execute("PRAGMA busy_timeout=2000;")
     cur.executemany("INSERT INTO logs (ts, tag, value, unit) VALUES (?,?,?,?)", rows)
     con.commit(); con.close()
 
@@ -193,6 +197,8 @@ def main():
     ensure_schema()
     pending, last_flush = [], time.time()
     consecutive_errors = 0
+    error_backoff_min = 0.5   # seconds
+    error_backoff_max = 5.0   # cap so we still retry periodically
 
     while True:
         try:
@@ -244,19 +250,31 @@ def main():
             time.sleep(SAMPLE_SEC)
 
         except Exception as e:
-            log.warning("Read error: %s", e)
             consecutive_errors += 1
+
+            # Exponential backoff with cap + small jitter
+            backoff = min(error_backoff_min * (2 ** min(consecutive_errors, 6)), error_backoff_max)
+            backoff += random.uniform(0, 0.2)
+
+            if consecutive_errors in (1, 5) or consecutive_errors % 20 == 0:
+                # rate-limit warnings a bit
+                log.warning(f"Modbus read error (#{consecutive_errors}): {e} — backing off {backoff:.2f}s")
+
             set_state_many([
                 ("connected", 0),
                 ("last_read_ok", 0),
                 ("consecutive_errors", consecutive_errors),
             ])
-            time.sleep(0.5)
+
+            time.sleep(backoff)
+
+            # drop connection to force clean reconnect next loop
             with _client_lock:
                 if _client:
                     try: _client.close()
                     except: pass
                 globals()["_client"] = None
+
 
 if __name__ == "__main__":
     main()
