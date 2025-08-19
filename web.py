@@ -3,6 +3,16 @@ import sqlite3, time, csv, io, struct, math
 from flask import Flask, request, jsonify, make_response
 from datetime import datetime, timedelta
 from typing import Optional
+from datetime import datetime, timedelta, timezone
+
+try:
+    from zoneinfo import ZoneInfo         # Python 3.9+
+    LOCAL_TZ = ZoneInfo("America/New_York")
+except Exception:
+    # Fallback if zoneinfo isn't available
+    from dateutil import tz
+    LOCAL_TZ = tz.gettz("America/New_York")
+
 
 # ======= CONFIG (keep in sync with logger.py) =======
 DB = "/home/ele/plc_logger/plc.db"
@@ -106,7 +116,7 @@ def home():
 
   <div class="table-responsive">
     <table class="table table-sm table-striped" id="tbl">
-      <thead><tr><th>Timestamp (UTC)</th><th>Tag</th><th>Value</th><th>Unit</th></tr></thead>
+      <thead><tr><th>Timestamp (Local)</th><th>Tag</th><th>Value</th><th>Unit</th></tr></thead>
       <tbody></tbody>
     </table>
   </div>
@@ -230,19 +240,18 @@ def _query_logs(tag: str, mins: int, limit: int, bucket_s: Optional[int]):
     out = []
     for r in rows:
         raw = r.get("ts", "")
-        # normalize like 2025-08-19T19:14:47 (drop microseconds if present)
-        base = raw.split(".")[0]
-        # allow both "YYYY-MM-DDTHH:MM:SS" and "YYYY-MM-DD HH:MM:SS"
-        base = base.replace(" ", "T")
+        base = raw.split(".")[0].replace(" ", "T")  # 'YYYY-MM-DDTHH:MM:SS'
         try:
             dt = datetime.fromisoformat(base)
-            r["ts_fmt"] = dt.strftime("%Y-%m-%d %I:%M:%S %p")
+            if dt.tzinfo is None:
+                dt = dt.replace(tzinfo=timezone.utc)  # treat stored ts as UTC
+            dt_local = dt.astimezone(LOCAL_TZ)
+            r["ts_fmt"] = dt_local.strftime("%Y-%m-%d %I:%M:%S %p")
         except Exception:
-            # fallback: just show raw if parsing fails
             r["ts_fmt"] = raw
         out.append(r)
-
     return out
+
 
 
 @app.route("/api/logs")
