@@ -29,8 +29,8 @@ STATUS_WINDOW_START = 400
 STATUS_WINDOW_END   = 449
 STATUS_COUNT = STATUS_WINDOW_END - STATUS_WINDOW_START + 1
 
-P1_OUT_WORD_MW = None   # e.g., 444
-P2_OUT_WORD_MW = None   # e.g., 446
+P1_OUT_WORD_MW = None
+P2_OUT_WORD_MW = None
 
 SYSTEM_TAGS = [
     {"name":"WetWellLevel", "mw":440, "type":"FLOAT32", "scale":1.0, "unit":"level"},
@@ -90,8 +90,15 @@ def get_client():
     global _client
     with _client_lock:
         if _client is None:
-            _client = ModbusTcpClient(PLC_IP, PLC_PORT, timeout=2)
-        if not _client.connected:
+            # KEY FIX: use keyword args so pymodbus 3.x doesn't error on __init__
+            _client = ModbusTcpClient(host=PLC_IP, port=PLC_PORT, timeout=2)
+        connected = getattr(_client, "connected", None)
+        if connected is None:
+            try:
+                connected = _client.is_socket_open()
+            except Exception:
+                connected = False
+        if not connected:
             _client.connect()
         return _client
 
@@ -150,24 +157,16 @@ def set_state_many(pairs):
 # ------------- Modbus helpers -------------
 def read_words(start_mw, count):
     cli = get_client()
-    # Try unit= first (older/newer versions vary), then fall back to slave=
-    try:
-        rr = cli.read_holding_registers(address=start_mw, count=count, unit=SLAVE_ID)
-    except TypeError:
-        rr = cli.read_holding_registers(address=start_mw, count=count, slave=SLAVE_ID)
-
-    # If server returned a Modbus exception, surface it clearly
+    # Back to original: use slave= (and keyword args for address/count)
+    rr = cli.read_holding_registers(address=start_mw, count=count, slave=SLAVE_ID)
+    # Surface Modbus exceptions clearly
     if hasattr(rr, "isError") and rr.isError():
         fc = getattr(rr, "function_code", None)
         ec = getattr(rr, "exception_code", None)
         raise RuntimeError(f"Modbus exception: function={fc} exception={ec} addr={start_mw} count={count}")
-
     if rr is None or not hasattr(rr, "registers"):
         raise RuntimeError(f"Modbus read returned no data for address={start_mw} count={count}")
-
     return rr.registers
-
-
 
 def to_int16(w):   return w - 65536 if w >= 32768 else w
 def to_uint16(w):  return w
