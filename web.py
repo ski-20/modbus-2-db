@@ -42,6 +42,48 @@ SETPOINTS = [
 SETPOINT_WINDOW_START = 300
 SETPOINT_WINDOW_END   = 323
 SETPOINT_COUNT = SETPOINT_WINDOW_END - SETPOINT_WINDOW_START + 1
+
+# Human-friendly labels for tags in the logs table.
+# LEFT SIDE: internal name as stored in DB
+# RIGHT SIDE: pretty label for UI
+TAG_LABELS = {
+    # --- Setpoints ---
+    "WetWell_Stop_Level": "Wet Well Stop Level",
+    "WetWell_Lead_Start_Level": "Wet Well Lead Pump Start Level",
+    "WetWell_Lag_Start_Level": "Wet Well Lag Pump Start Level",
+    "WetWell_High_Level": "Wet Well High Level",
+    "WetWell_Level_Scale_0V": "Wet Well Level Scaling – 0 V",
+    "WetWell_Level_Scale_10V": "Wet Well Level Scaling – 10 V",
+    "Spare_Analog_IO_1": "Spare Analog IO 1",
+    "Spare_Analog_IO_2": "Spare Analog IO 2",
+    "Pump1_Speed_Setpoint_pct": "Pump 1 Speed Setpoint (%)",
+    "Pump2_Speed_Setpoint_pct": "Pump 2 Speed Setpoint (%)",
+    "Pump1_FailToRun_Delay_sec": "Pump 1 Fail-To-Run Delay (s)",
+    "Pump2_FailToRun_Delay_sec": "Pump 2 Fail-To-Run Delay (s)",
+    "Spare_Analog_IO_HighLevel": "Spare Analog IO High Level",
+
+    # --- Examples for status tags (add all you care about) ---
+    "P1_DrvStatusWord": "Pump 1 Drive Status Word",
+    "P1_SpeedRaw": "Pump 1 Speed (raw)",
+    "P1_MotorCurrent": "Pump 1 Motor Current (A)",
+    "P1_DCBusV": "Pump 1 DC Bus Voltage (V)",
+    "P1_OutV": "Pump 1 Output Voltage (V)",
+    "P1_TorqueRaw": "Pump 1 Torque (raw)",
+    "P1_FaultActive": "Pump 1 Active Fault",
+    "P1_FaultPrev": "Pump 1 Previous Fault",
+    "P1_Starts": "Pump 1 Total Starts",
+    "P1_Hours_x10": "Pump 1 Total Hours (x10)",
+    "P1_Status": "Pump 1 Status (1=Running)",
+    "P1_Mode": "Pump 1 Mode",
+    "P1_OutDataWord": "Pump 1 Output Data Word",
+
+    "P2_DrvStatusWord": "Pump 2 Drive Status Word",
+    "P2_MotorCurrent": "Pump 2 Motor Current (A)",
+    # ...continue for the P2_* tags you use...
+    "WetWellLevel": "Wet Well Level",
+    "SYS1_OutDataWord": "System Output Data Word",
+}
+
 # =====================================================
 
 app = Flask(__name__)
@@ -67,10 +109,12 @@ def home():
     cur_bucket = request.args.get("bucket_s", "")
 
     tags = list_tags()
-    options = ['<option value="">(all)</option>'] + [
-        f'<option value="{t}" {"selected" if t==cur_tag else ""}>{t}</option>'
-        for t in tags
-    ]
+    options = ['<option value="">(all)</option>']
+    for t in tags:
+        label = TAG_LABELS.get(t, t)
+        sel = "selected" if t == cur_tag else ""
+        options.append(f'<option value="{t}" {sel}>{label}</option>')
+
 
     return f"""
 <!doctype html><html><head>
@@ -134,7 +178,7 @@ async function loadTable() {{
   tbody.innerHTML = rows.map(function(row) {{
     return '<tr>'
       + '<td>' + (row.ts_fmt || row.ts) + '</td>'
-      + '<td>' + row.tag  + '</td>'
+      + '<td>' + row.tag_label  + '</td>'
       + '<td>' + row.value + '</td>'
       + '<td>' + (row.unit || '') + '</td>'
       + '</tr>';
@@ -249,6 +293,10 @@ def _query_logs(tag: str, mins: int, limit: int, bucket_s: Optional[int]):
             r["ts_fmt"] = dt_local.strftime("%Y-%m-%d %I:%M:%S %p")
         except Exception:
             r["ts_fmt"] = raw
+
+        # attach tag_label
+        r["tag_label"] = TAG_LABELS.get(r["tag"], r["tag"])
+
         out.append(r)
     return out
 
@@ -369,8 +417,14 @@ def setpoints():
     else:
         msg = emsg or msg or "Unable to read setpoints."
 
-    table_rows = "".join([f"<tr><td>{n}</td><td>%MW{mw}</td><td>{typ}</td><td>{val}</td></tr>" for (n,mw,typ,val) in rows])
-    names_opts = "".join([f'<option value="{sp["name"]}">{sp["name"]}</option>' for sp in SETPOINTS])
+    table_rows = "".join([
+        f"<tr><td>{TAG_LABELS.get(n, n)}</td><td>%MW{mw}</td><td>{typ}</td><td>{val}</td></tr>"
+        for (n, mw, typ, val) in rows
+    ])
+    names_opts = "".join([
+        f'<option value="{sp["name"]}">{TAG_LABELS.get(sp["name"], sp["name"])}</option>'
+        for sp in SETPOINTS
+    ])
 
     return f"""<!doctype html><html><head>
 <meta charset="utf-8"><link href="/static/bootstrap.min.css" rel="stylesheet">
@@ -411,6 +465,12 @@ def health():
         return "ok", 200
     except Exception as e:
         return f"db error: {e}", 500
+    
+@app.route("/tags")
+def tags():
+    with db() as con:
+        raw = [r["tag"] for r in con.execute("SELECT DISTINCT tag FROM logs ORDER BY tag")]
+    return jsonify([{"tag": t, "label": TAG_LABELS.get(t, t)} for t in raw])
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=8080)
