@@ -144,14 +144,16 @@ def set_state_many(pairs):
     cur.executemany("""
         INSERT INTO state(key, value) VALUES(?,?)
         ON CONFLICT(key) DO UPDATE SET value=excluded.value
-    """, [(k, float(v)) for k,v in pairs])
+    """, [(k, float(v)) for k, v in pairs])
     con.commit(); con.close()
 
 # ------------- Modbus helpers -------------
 def read_words(start_mw, count):
     cli = get_client()
-    rr = cli.read_holding_registers(start_mw, count, slave=SLAVE_ID)
-    if rr.isError(): raise RuntimeError(rr)
+    # ✅ pymodbus 3.x requires keyword args
+    rr = cli.read_holding_registers(address=start_mw, count=count, slave=SLAVE_ID)
+    if rr.isError():
+        raise RuntimeError(rr)
     return rr.registers
 
 def to_int16(w):   return w - 65536 if w >= 32768 else w
@@ -197,8 +199,8 @@ def main():
     ensure_schema()
     pending, last_flush = [], time.time()
     consecutive_errors = 0
-    error_backoff_min = 0.5   # seconds
-    error_backoff_max = 5.0   # cap so we still retry periodically
+    error_backoff_min = 0.5
+    error_backoff_max = 5.0
 
     while True:
         try:
@@ -251,13 +253,10 @@ def main():
 
         except Exception as e:
             consecutive_errors += 1
-
-            # Exponential backoff with cap + small jitter
             backoff = min(error_backoff_min * (2 ** min(consecutive_errors, 6)), error_backoff_max)
             backoff += random.uniform(0, 0.2)
 
             if consecutive_errors in (1, 5) or consecutive_errors % 20 == 0:
-                # rate-limit warnings a bit
                 log.warning(f"Modbus read error (#{consecutive_errors}): {e} — backing off {backoff:.2f}s")
 
             set_state_many([
@@ -268,13 +267,11 @@ def main():
 
             time.sleep(backoff)
 
-            # drop connection to force clean reconnect next loop
             with _client_lock:
                 if _client:
                     try: _client.close()
                     except: pass
                 globals()["_client"] = None
-
 
 if __name__ == "__main__":
     main()
