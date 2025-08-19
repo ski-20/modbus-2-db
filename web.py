@@ -1,21 +1,17 @@
 #!/usr/bin/env python3
-import sqlite3, time, csv, io, struct
+import sqlite3, time, csv, io, struct, math
 from flask import Flask, request, jsonify, make_response
 from datetime import datetime, timedelta
 
-from pymodbus.client import ModbusTcpClient
-
-# ======= keep these in sync with logger.py =======
+# ======= CONFIG (keep in sync with logger.py) =======
 DB = "/home/ele/plc_logger/plc.db"
 
+# Modbus setpoint write support (optional)
+USE_MODBUS = True
 PLC_IP   = "10.0.0.1"
 PLC_PORT = 502
 SLAVE_ID = 1
-WORD_ORDER = "HL"   # "HL" => HI word then LO word; switch to "LH" if needed
-
-SETPOINT_WINDOW_START = 300
-SETPOINT_WINDOW_END   = 323
-SETPOINT_COUNT = SETPOINT_WINDOW_END - SETPOINT_WINDOW_START + 1
+WORD_ORDER = "HL"
 
 SETPOINTS = [
     {"name":"WetWell_Stop_Level",          "mw":300, "type":"FLOAT32"},
@@ -32,7 +28,10 @@ SETPOINTS = [
     {"name":"Pump2_FailToRun_Delay_sec",   "mw":321, "type":"INT16"},
     {"name":"Spare_Analog_IO_HighLevel",   "mw":322, "type":"FLOAT32"},
 ]
-# ==================================================
+SETPOINT_WINDOW_START = 300
+SETPOINT_WINDOW_END   = 323
+SETPOINT_COUNT = SETPOINT_WINDOW_END - SETPOINT_WINDOW_START + 1
+# =====================================================
 
 app = Flask(__name__)
 
@@ -43,136 +42,85 @@ def db():
     con.execute("PRAGMA busy_timeout=2000")
     return con
 
-# ---------- Modbus helpers ----------
-_client = None
-def mb_client():
-    global _client
-    if _client is None:
-        # IMPORTANT: keyword args for pymodbus 3.x
-        _client = ModbusTcpClient(host=PLC_IP, port=PLC_PORT, timeout=2)
-    if not getattr(_client, "connected", False):
-        try:
-            _client.connect()
-        except Exception:
-            pass
-    return _client
-
-def float_to_words(val):
-    # pack >f then split to >HH; swap if WORD_ORDER == "LH"
-    hi, lo = struct.unpack(">HH", struct.pack(">f", float(val)))
-    return (lo, hi) if WORD_ORDER == "LH" else (hi, lo)
-
-def words_to_float(hi, lo):
-    if WORD_ORDER == "LH":
-        hi, lo = lo, hi
-    return struct.unpack(">f", struct.pack(">HH", hi, lo))[0]
-
-# ---------- Pages ----------
+# ---------- Basic pages ----------
 @app.route("/")
 def home():
-    """
-    Simple HTML table of recent log rows with filters:
-    /?tag=P1_MotorCurrent&mins=60&limit=200
-    """
-    tag  = request.args.get("tag", "").strip()
-    mins = int(request.args.get("mins", "60") or "60")   # last N minutes
-    limit = int(request.args.get("limit", "200") or "200")
-    since_ts = (datetime.utcnow() - timedelta(minutes=mins)).isoformat()
-
-    q = "SELECT ts, tag, value, unit FROM logs WHERE ts >= ?"
-    args = [since_ts]
-    if tag:
-        q += " AND tag = ?"
-        args.append(tag)
-    q += " ORDER BY ts DESC LIMIT ?"
-    args.append(limit)
-
-    rows = []
-    with db() as con:
-        rows = list(con.execute(q, args))
-
-    # quick tag list for dropdown
-    with db() as con:
-        tags = [r["tag"] for r in con.execute("SELECT DISTINCT tag FROM logs ORDER BY tag")]
-
-    # minimal HTML (Bootstrap via CDN)
-    html = """
+    # Minimal UI that calls our JSON endpoints
+    return """
 <!doctype html><html><head>
 <meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
 <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/css/bootstrap.min.css" rel="stylesheet">
-<title>PLC Data Log</title>
+<title>PLC Logger UI</title>
 </head><body class="p-3">
 <div class="container-fluid">
-  <h3>PLC Data Log</h3>
-  <form class="row g-2 mb-3">
-    <div class="col-sm-3">
-      <label class="form-label">Tag</label>
-      <select class="form-select" name="tag">
-        <option value="">(all)</option>
-        """ + "\n".join([f'<option value="{t}" {"selected" if t==tag else ""}>{t}</option>' for t in tags]) + """
-      </select>
+  <h3>PLC Logger</h3>
+
+  <div class="mb-3">
+    <a class="btn btn-outline-secondary btn-sm" href="/status_page">Status</a>
+    <a class="btn btn-outline-secondary btn-sm" href="/setpoints">Setpoints</a>
+  </div>
+
+  <form id="f" class="row g-2 mb-3">
+    <div class="col-sm-4">
+      <label class="form-label">Tag (optional)</label>
+      <input class="form-control" name="tag" placeholder="e.g. P1_MotorCurrent">
     </div>
     <div class="col-sm-2">
-      <label class="form-label">Last (mins)</label>
-      <input class="form-control" name="mins" value='""" + str(mins) + """'>
+      <label class="form-label">Last minutes</label>
+      <input class="form-control" name="mins" value="60">
     </div>
     <div class="col-sm-2">
       <label class="form-label">Limit</label>
-      <input class="form-control" name="limit" value='""" + str(limit) + """'>
+      <input class="form-control" name="limit" value="500">
+    </div>
+    <div class="col-sm-2">
+      <label class="form-label">Bucket (sec, optional)</label>
+      <input class="form-control" name="bucket_s" placeholder="e.g. 1 or 5">
     </div>
     <div class="col-sm-2 align-self-end">
-      <button class="btn btn-primary w-100" type="submit">Apply</button>
-    </div>
-    <div class="col-sm-3 align-self-end">
-      <a class="btn btn-outline-secondary w-100" href="/download.csv?tag=""" + tag + "&mins=" + str(mins) + "&limit=" + str(limit) + """">Download CSV</a>
+      <button class="btn btn-primary w-100" type="submit">Load</button>
     </div>
   </form>
 
-  <div class="mb-2"><a class="btn btn-sm btn-outline-dark" href="/status_page">Status</a>
-  <a class="btn btn-sm btn-outline-dark" href="/setpoints">Setpoints</a></div>
+  <div class="mb-2">
+    <a id="dl" class="btn btn-outline-secondary btn-sm" href="#">Download CSV</a>
+  </div>
 
-  <table class="table table-sm table-striped">
-    <thead><tr><th>Timestamp (UTC)</th><th>Tag</th><th>Value</th><th>Unit</th></tr></thead>
-    <tbody>
-    """ + "\n".join([f"<tr><td>{r['ts']}</td><td>{r['tag']}</td><td>{r['value']}</td><td>{r['unit'] or ''}</td></tr>" for r in rows]) + """
-    </tbody>
-  </table>
-</div></body></html>
+  <div class="table-responsive">
+    <table class="table table-sm table-striped" id="tbl">
+      <thead><tr><th>Timestamp (UTC)</th><th>Tag</th><th>Value</th><th>Unit</th></tr></thead>
+      <tbody></tbody>
+    </table>
+  </div>
+</div>
+<script>
+const f = document.getElementById('f');
+const tbody = document.querySelector('#tbl tbody');
+const dl = document.getElementById('dl');
+
+f.addEventListener('submit', async (e) => {
+  e.preventDefault();
+  const p = new URLSearchParams(new FormData(f));
+  // update CSV link
+  dl.href = '/api/download.csv?' + p.toString();
+
+  const r = await fetch('/api/logs?' + p.toString());
+  const rows = await r.json();
+  tbody.innerHTML = rows.map(r =>
+    `<tr><td>${r.ts}</td><td>${r.tag}</td><td>${r.value}</td><td>${r.unit||''}</td></tr>`
+  ).join('');
+});
+</script>
+</body></html>
 """
-    return html
-
-@app.route("/download.csv")
-def download_csv():
-    tag  = request.args.get("tag", "").strip()
-    mins = int(request.args.get("mins", "60") or "60")
-    limit = int(request.args.get("limit", "10000") or "10000")
-    since_ts = (datetime.utcnow() - timedelta(minutes=mins)).isoformat()
-
-    q = "SELECT ts, tag, value, unit FROM logs WHERE ts >= ?"
-    args = [since_ts]
-    if tag:
-        q += " AND tag = ?"
-        args.append(tag)
-    q += " ORDER BY ts DESC LIMIT ?"
-    args.append(limit)
-
-    with db() as con:
-        rows = list(con.execute(q, args))
-
-    buf = io.StringIO()
-    w = csv.writer(buf)
-    w.writerow(["ts","tag","value","unit"])
-    for r in rows:
-        w.writerow([r["ts"], r["tag"], r["value"], r["unit"] or ""])
-    resp = make_response(buf.getvalue())
-    resp.headers["Content-Type"] = "text/csv"
-    resp.headers["Content-Disposition"] = "attachment; filename=logs.csv"
-    return resp
 
 # ---------- Status ----------
 def _read_state():
-    with db() as con:
-        return {k: v for (k, v) in con.execute("SELECT key, value FROM state")}
+    try:
+        with db() as con:
+            return {k: v for (k, v) in con.execute("SELECT key, value FROM state")}
+    except Exception:
+        return {}
 
 @app.route("/status")
 def status_json():
@@ -208,67 +156,166 @@ def status_page():
 <p><a class="btn btn-outline-secondary" href="/">Back</a></p>
 </div></body></html>"""
 
-# ---------- Setpoints UI ----------
+# ---------- Logs API with optional bucketing ----------
+def _query_logs(tag:str, mins:int, limit:int, bucket_s:int|None):
+    since_ts = (datetime.utcnow() - timedelta(minutes=mins)).isoformat()
+
+    if bucket_s and bucket_s > 0:
+        # bucket by second (or N seconds) using integer epoch
+        # ts is ISO text; convert to epoch via strftime on the DB side isn’t trivial,
+        # so we approximate by truncating to seconds with substr and then aggregate avg(value)
+        # Note: This groups by second; to widen to N seconds, group on integer second // bucket_s
+        q = """
+        WITH rows AS (
+          SELECT substr(ts,1,19) AS s, tag, value, unit
+          FROM logs
+          WHERE ts >= ?
+          {tag_clause}
+        )
+        SELECT s AS ts, tag, avg(value) AS value, MAX(unit) AS unit
+        FROM rows
+        GROUP BY tag, s
+        ORDER BY ts DESC
+        LIMIT ?
+        """
+        tag_clause = "" if not tag else "AND tag = ?"
+        q = q.format(tag_clause=tag_clause)
+        args = [since_ts] + ([tag] if tag else []) + [limit]
+    else:
+        q = """
+        SELECT ts, tag, value, unit
+        FROM logs
+        WHERE ts >= ?
+        {tag_clause}
+        ORDER BY ts DESC
+        LIMIT ?
+        """
+        tag_clause = "" if not tag else "AND tag = ?"
+        q = q.format(tag_clause=tag_clause)
+        args = [since_ts] + ([tag] if tag else []) + [limit]
+
+    with db() as con:
+        return [dict(r) for r in con.execute(q, args)]
+
+@app.route("/api/logs")
+def api_logs():
+    tag   = request.args.get("tag","").strip() or None
+    mins  = int(request.args.get("mins","60") or 60)
+    limit = int(request.args.get("limit","500") or 500)
+    bucket_s = request.args.get("bucket_s","").strip()
+    bucket_s = int(bucket_s) if bucket_s.isdigit() else None
+    rows = _query_logs(tag, mins, limit, bucket_s)
+    return jsonify(rows)
+
+@app.route("/api/download.csv")
+def api_download_csv():
+    tag   = request.args.get("tag","").strip() or None
+    mins  = int(request.args.get("mins","60") or 60)
+    limit = int(request.args.get("limit","100000") or 100000)
+    bucket_s = request.args.get("bucket_s","").strip()
+    bucket_s = int(bucket_s) if bucket_s.isdigit() else None
+
+    rows = _query_logs(tag, mins, limit, bucket_s)
+
+    buf = io.StringIO()
+    w = csv.writer(buf)
+    w.writerow(["ts","tag","value","unit"])
+    for r in rows:
+        w.writerow([r["ts"], r["tag"], r["value"], r.get("unit","")])
+    resp = make_response(buf.getvalue())
+    resp.headers["Content-Type"] = "text/csv"
+    resp.headers["Content-Disposition"] = "attachment; filename=logs.csv"
+    return resp
+
+# ---------- Setpoints (safe even if PLC offline) ----------
+try:
+    from pymodbus.client import ModbusTcpClient
+except Exception:
+    USE_MODBUS = False
+
+_mb = None
+def mb_client():
+    if not USE_MODBUS:
+        return None
+    global _mb
+    if _mb is None:
+        _mb = ModbusTcpClient(host=PLC_IP, port=PLC_PORT, timeout=2)
+    if not getattr(_mb, "connected", False):
+        try: _mb.connect()
+        except Exception: pass
+    return _mb
+
+def float_to_words(val):
+    hi, lo = struct.unpack(">HH", struct.pack(">f", float(val)))
+    return (lo, hi) if WORD_ORDER == "LH" else (hi, lo)
+
+def words_to_float(hi, lo):
+    if WORD_ORDER == "LH":
+        hi, lo = lo, hi
+    return struct.unpack(">f", struct.pack(">HH", hi, lo))[0]
+
 def read_setpoint_block():
     c = mb_client()
-    rr = c.read_holding_registers(address=SETPOINT_WINDOW_START, count=SETPOINT_COUNT, slave=SLAVE_ID)
-    if hasattr(rr, "isError") and rr.isError():
-        return None
-    return rr.registers
+    if not c:
+        return None, "Modbus client not available"
+    try:
+        rr = c.read_holding_registers(address=SETPOINT_WINDOW_START, count=SETPOINT_COUNT, slave=SLAVE_ID)
+        if hasattr(rr,"isError") and rr.isError():
+            return None, f"Modbus read error: {rr}"
+        return rr.registers, None
+    except Exception as e:
+        return None, f"Modbus exception: {e}"
 
-def get_setpoint_value(words, sp):
-    i = sp["mw"] - SETPOINT_WINDOW_START
-    if sp["type"] == "INT16":
-        return words[i] if i >= 0 else None
-    if sp["type"] == "FLOAT32":
-        hi, lo = words[i], words[i+1]
-        return words_to_float(hi, lo)
-    return None
-
-@app.route("/setpoints", methods=["GET", "POST"])
+@app.route("/setpoints", methods=["GET","POST"])
 def setpoints():
     msg = ""
     if request.method == "POST":
-        # Expect payload like {"name":"WetWell_Stop_Level","value": 5.5}
-        name = request.form.get("name") or request.json.get("name")
-        value = request.form.get("value") or request.json.get("value")
-        try:
-            value = float(value)
-        except:
-            return jsonify({"ok": False, "error": "invalid value"}), 400
-
+        if not USE_MODBUS:
+            return make_response("Modbus not enabled on server", 500)
+        name = (request.form.get("name") or (request.json or {}).get("name") or "").strip()
+        value = (request.form.get("value") or (request.json or {}).get("value") or "").strip()
         sp = next((s for s in SETPOINTS if s["name"] == name), None)
-        if not sp:
-            return jsonify({"ok": False, "error": "unknown setpoint"}), 400
-
-        c = mb_client()
-        if sp["type"] == "INT16":
-            r = c.write_register(address=sp["mw"], value=int(value), slave=SLAVE_ID)
-            ok = not (hasattr(r, "isError") and r.isError())
+        try:
+            fval = float(value)
+        except:
+            fval = None
+        if not sp or fval is None:
+            msg = "Invalid name or value"
         else:
-            hi, lo = float_to_words(value)
-            r = c.write_registers(address=sp["mw"], values=[hi, lo], slave=SLAVE_ID)
-            ok = not (hasattr(r, "isError") and r.isError())
+            c = mb_client()
+            try:
+                if sp["type"] == "INT16":
+                    r = c.write_register(address=sp["mw"], value=int(fval), slave=SLAVE_ID)
+                    ok = not (hasattr(r,"isError") and r.isError())
+                else:
+                    hi, lo = float_to_words(fval)
+                    r = c.write_registers(address=sp["mw"], values=[hi, lo], slave=SLAVE_ID)
+                    ok = not (hasattr(r,"isError") and r.isError())
+                msg = f"Updated {name}" if ok else f"Write failed for {name}"
+            except Exception as e:
+                msg = f"Write exception: {e}"
 
-        if ok:
-            msg = f"Updated {name}."
-        else:
-            msg = f"Write failed for {name}."
-
-    words = read_setpoint_block()
+    words, emsg = read_setpoint_block()
     rows = []
     if words:
         for sp in SETPOINTS:
-            val = get_setpoint_value(words, sp)
+            i = sp["mw"] - SETPOINT_WINDOW_START
+            val = None
+            try:
+                if sp["type"] == "INT16":
+                    val = words[i]
+                elif sp["type"] == "FLOAT32":
+                    val = words_to_float(words[i], words[i+1])
+            except Exception:
+                val = None
             rows.append((sp["name"], sp["mw"], sp["type"], val))
     else:
-        msg = msg or "Unable to read setpoints (Modbus error)."
+        msg = emsg or msg or "Unable to read setpoints."
 
-    # produce simple HTML form
     table_rows = "".join([f"<tr><td>{n}</td><td>%MW{mw}</td><td>{typ}</td><td>{val}</td></tr>" for (n,mw,typ,val) in rows])
     names_opts = "".join([f'<option value="{sp["name"]}">{sp["name"]}</option>' for sp in SETPOINTS])
 
-    html = f"""<!doctype html><html><head>
+    return f"""<!doctype html><html><head>
 <meta charset="utf-8"><link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/css/bootstrap.min.css" rel="stylesheet">
 <title>Setpoints</title></head><body class="p-3">
 <div class="container">
@@ -297,15 +344,16 @@ def setpoints():
   </table>
   <p><a class="btn btn-outline-secondary" href="/">Back</a></p>
 </div></body></html>"""
-    return html
 
-# (Optional) simple API to get list of tags
-@app.route("/tags")
-def tags():
-    with db() as con:
-        rows = [r["tag"] for r in con.execute("SELECT DISTINCT tag FROM logs ORDER BY tag")]
-    return jsonify(rows)
+# health
+@app.route("/health")
+def health():
+    try:
+        with db() as con:
+            con.execute("SELECT 1")
+        return "ok", 200
+    except Exception as e:
+        return f"db error: {e}", 500
 
 if __name__ == "__main__":
-    # Run with: python3 web.py
     app.run(host="0.0.0.0", port=8080)
