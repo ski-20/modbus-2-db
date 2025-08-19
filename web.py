@@ -43,11 +43,28 @@ def db():
     con.execute("PRAGMA busy_timeout=2000")
     return con
 
+def list_tags():
+    with db() as con:
+        return [r["tag"] for r in con.execute("SELECT DISTINCT tag FROM logs ORDER BY tag")]
+
 # ---------- Basic pages ----------
 @app.route("/")
+@app.route("/")
 def home():
-    # Minimal UI that calls our JSON endpoints
-    return """
+    # read current query (so we can keep selections on refresh)
+    cur_tag  = request.args.get("tag", "").strip()
+    cur_mins = request.args.get("mins", "60")
+    cur_limit = request.args.get("limit", "500")
+    cur_bucket = request.args.get("bucket_s", "")
+
+    tags = list_tags()
+
+    options = ['<option value="">(all)</option>'] + [
+        f'<option value="{t}" {"selected" if t==cur_tag else ""}>{t}</option>'
+        for t in tags
+    ]
+
+    return f"""
 <!doctype html><html><head>
 <meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
 <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/css/bootstrap.min.css" rel="stylesheet">
@@ -63,20 +80,22 @@ def home():
 
   <form id="f" class="row g-2 mb-3">
     <div class="col-sm-4">
-      <label class="form-label">Tag (optional)</label>
-      <input class="form-control" name="tag" placeholder="e.g. P1_MotorCurrent">
+      <label class="form-label">Tag</label>
+      <select class="form-select" name="tag">
+        {''.join(options)}
+      </select>
     </div>
     <div class="col-sm-2">
       <label class="form-label">Last minutes</label>
-      <input class="form-control" name="mins" value="60">
+      <input class="form-control" name="mins" value="{cur_mins}">
     </div>
     <div class="col-sm-2">
       <label class="form-label">Limit</label>
-      <input class="form-control" name="limit" value="500">
+      <input class="form-control" name="limit" value="{cur_limit}">
     </div>
     <div class="col-sm-2">
       <label class="form-label">Bucket (sec, optional)</label>
-      <input class="form-control" name="bucket_s" placeholder="e.g. 1 or 5">
+      <input class="form-control" name="bucket_s" value="{cur_bucket}">
     </div>
     <div class="col-sm-2 align-self-end">
       <button class="btn btn-primary w-100" type="submit">Load</button>
@@ -99,18 +118,24 @@ const f = document.getElementById('f');
 const tbody = document.querySelector('#tbl tbody');
 const dl = document.getElementById('dl');
 
-f.addEventListener('submit', async (e) => {
-  e.preventDefault();
+async function loadTable() {{
   const p = new URLSearchParams(new FormData(f));
-  // update CSV link
   dl.href = '/api/download.csv?' + p.toString();
-
   const r = await fetch('/api/logs?' + p.toString());
   const rows = await r.json();
   tbody.innerHTML = rows.map(r =>
     `<tr><td>${r.ts}</td><td>${r.tag}</td><td>${r.value}</td><td>${r.unit||''}</td></tr>`
   ).join('');
-});
+}}
+
+// submit handler
+f.addEventListener('submit', (e) => {{
+  e.preventDefault();
+  loadTable();
+}});
+
+// auto-load with current selections on first paint
+loadTable();
 </script>
 </body></html>
 """
