@@ -1,80 +1,43 @@
 #!/usr/bin/env python3
 import time, struct, sqlite3, threading, random
 from datetime import datetime
-from pymodbus.client import ModbusTcpClient
+import logging
 
 # ------------------ CONFIG ------------------
-from config import DB, PLC_IP, PLC_PORT, SLAVE_ID, WORD_ORDER
-LOG_NAME = "modbus_logger"
+# Prefer config.py if you have it
+try:
+    from config import DB, PLC_IP, PLC_PORT, WORD_ORDER
+except Exception:
+    DB = "/home/ele/plc_logger/plc.db"
+    PLC_IP, PLC_PORT = "10.0.0.1", 502
+    WORD_ORDER = "HL"   # "HL" = hi-word first in %MWn, %MWn+1; use "LH" if low-word first
 
-import logging
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s %(levelname)s %(message)s",
-)
+# Tags + cadences come from tags.py
+from tags import TAGS, FAST_SEC, SAMPLE_SEC
+
+LOG_NAME = "modbus_logger"
+logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 log = logging.getLogger(LOG_NAME)
 
-# Polling intervals
-FAST_SEC = 1      # fast cycle for high-priority tags
-SLOW_SEC = 10     # slow cycle for less frequent tags
-SYS_SEC = 30      # system health status
-SAMPLE_SEC = 0.5  # Modbus polling rate
-
-# "HL" => [%MWn=HI, %MWn+1=LO]; flip to "LH" if PLC uses low-word first
-WORD_ORDER = "HL"
-
-# ===== Status block (read every 0.5 s) =====
-P1_BASE = 400
-P2_BASE = 420
-
-STATUS_WINDOW_START = 400
-STATUS_WINDOW_END   = 449
-STATUS_COUNT = STATUS_WINDOW_END - STATUS_WINDOW_START + 1
-
-# Per-pump OUT_DATAWORD placeholders (not used but kept for completeness)
-P1_OUT_WORD_MW = None
-P2_OUT_WORD_MW = None
-
-# ---------- Tag definitions (with labels) ----------
-from tags import P1_TAGS, P2_TAGS, SYSTEM_TAGS, SETPOINTS, P1_BASE, P2_BASE
-
-def _validate_tags(name, tags):
-    req = {"name","mw"}
-    for t in tags:
-        missing = [k for k in req if k not in t]
-        if missing:
-            log.error(f"{name}: tag missing {missing}: {t}")
-        if "type" not in t and "dtype" not in t:
-            log.error(f"{name}: tag missing 'type'/'dtype': {t}")
-
-_validate_tags("P1_TAGS", P1_TAGS)
-_validate_tags("P2_TAGS", P2_TAGS)
-_validate_tags("SYSTEM_TAGS", SYSTEM_TAGS)
-
-# Shared client
+# ------------------ Modbus client ------------------
+from pymodbus.client import ModbusTcpClient
 _client_lock = threading.Lock()
 _client = None
+
 def get_client():
+    """Get or (re)connect Modbus TCP client."""
     global _client
     with _client_lock:
         if _client is None:
-            # keyword args for pymodbus 3.x
             _client = ModbusTcpClient(host=PLC_IP, port=PLC_PORT, timeout=2)
-        connected = getattr(_client, "connected", None)
-        if connected is None:
-            try:
-                connected = _client.is_socket_open()
-            except Exception:
-                connected = False
-        if not connected:
+        if not getattr(_client, "connected", False):
             _client.connect()
         return _client
 
-# ------------- DB -------------
+# ------------------ DB helpers ------------------
 def ensure_schema():
     con = sqlite3.connect(DB)
     cur = con.cursor()
-    # Concurrency / durability
     cur.execute("PRAGMA journal_mode=WAL;")
     cur.execute("PRAGMA busy_timeout=2000;")
     cur.execute("""
@@ -86,31 +49,49 @@ def ensure_schema():
       )
     """)
     cur.execute("CREATE INDEX IF NOT EXISTS idx_logs_tag_ts ON logs(tag, ts)")
-    # health/status
     cur.execute("""
       CREATE TABLE IF NOT EXISTS state (
         key TEXT PRIMARY KEY,
         value REAL
       )
     """)
-    # tag metadata (stable key + pretty label + unit)
+    # meta for labels/units/addresses
     cur.execute("""
       CREATE TABLE IF NOT EXISTS tag_meta (
-        name  TEXT PRIMARY KEY,
-        label TEXT,
-        unit  TEXT
+        tag    TEXT PRIMARY KEY,
+        label  TEXT,
+        unit   TEXT,
+        mw     INTEGER,
+        dtype  TEXT
       )
     """)
     con.commit(); con.close()
 
-def upsert_tag_meta(tag_defs):
-    if not tag_defs: return
+def upsert_tag_meta_from_tags():
+    """Logger is the sole owner of tag_meta contents."""
+    rows = [(t["name"], t.get("label", t["name"]), t.get("unit",""), int(t["mw"]),
+             (t.get("dtype") or t.get("type","INT16")).upper()) for t in TAGS]
     con = sqlite3.connect(DB, timeout=30)
     cur = con.cursor()
     cur.executemany("""
-      INSERT INTO tag_meta(name, label, unit) VALUES(?,?,?)
-      ON CONFLICT(name) DO UPDATE SET label=excluded.label, unit=excluded.unit
-    """, [(t["name"], t.get("label", t["name"]), t.get("unit","")) for t in tag_defs])
+        INSERT INTO tag_meta(tag, label, unit, mw, dtype)
+        VALUES(?,?,?,?,?)
+        ON CONFLICT(tag) DO UPDATE SET
+            label=excluded.label,
+            unit =excluded.unit,
+            mw   =excluded.mw,
+            dtype=excluded.dtype
+    """, rows)
+    con.commit(); con.close()
+
+def set_state_many(pairs):
+    if not pairs: return
+    con = sqlite3.connect(DB, timeout=30)
+    cur = con.cursor()
+    cur.executemany("""
+        INSERT INTO state(key, value) VALUES(?,?)
+        ON CONFLICT(key) DO UPDATE SET value=excluded.value
+    """, [(k, float(v)) for k,v in pairs])
     con.commit(); con.close()
 
 def write_rows(rows):
@@ -121,26 +102,7 @@ def write_rows(rows):
     cur.executemany("INSERT INTO logs (ts, tag, value, unit) VALUES (?,?,?,?)", rows)
     con.commit(); con.close()
 
-# ------------- Modbus helpers -------------
-def read_words(start_mw, count):
-    cli = get_client()
-    try:
-        rr = cli.read_holding_registers(address=start_mw, count=count)
-    except Exception as e:
-        raise RuntimeError(f"Socket/transport error reading %MW{start_mw}..%MW{start_mw+count-1}: {e}")
-
-    if rr is None:
-        raise RuntimeError(f"No response reading %MW{start_mw}..%MW{start_mw+count-1}")
-    if hasattr(rr, "isError") and rr.isError():
-        fc = getattr(rr, "function_code", None)
-        ec = getattr(rr, "exception_code", None)
-        raise RuntimeError(
-            f"Modbus exception %MW{start_mw}..%MW{start_mw+count-1}: function={fc} exception={ec} ({rr})"
-        )
-    if not hasattr(rr, "registers") or rr.registers is None:
-        raise RuntimeError(f"Malformed response for %MW{start_mw}..%MW{start_mw+count-1}: {rr!r}")
-    return rr.registers
-
+# ------------------ Modbus decode helpers ------------------
 def to_int16(w):   return w - 65536 if w >= 32768 else w
 def to_uint16(w):  return w
 def to_int32(hi, lo):
@@ -154,135 +116,190 @@ def to_float32(hi, lo):
     if WORD_ORDER == "LH": hi, lo = lo, hi
     return struct.unpack(">f", struct.pack(">HH", hi, lo))[0]
 
-def decode_in_status_window(words, mw, typ):
-    i = mw - STATUS_WINDOW_START
-    if i < 0 or i >= len(words): return None
-    if typ == "INT16":   return float(to_int16(words[i]))
-    if typ == "UINT16":  return float(to_uint16(words[i]))
-    if typ in ("INT32","UINT32","FLOAT32"):
-        if i+1 >= len(words): return None
-        hi, lo = words[i], words[i+1]
-        if typ == "INT32":   return float(to_int32(hi, lo))
-        if typ == "UINT32":  return float(to_uint32(hi, lo))
-        if typ == "FLOAT32": return float(to_float32(hi, lo))
-    raise ValueError(f"bad type {typ}")
+def read_words(start_mw, count):
+    cli = get_client()
+    try:
+        rr = cli.read_holding_registers(address=start_mw, count=count)
+    except Exception as e:
+        raise RuntimeError(f"Socket/transport error reading %MW{start_mw}..%MW{start_mw+count-1}: {e}")
 
-# ------------- Logging logic -------------
-last_log_time = {}   # per-tag last write time (epoch seconds)
-def due(tag_name, now_s, period_s):
-    return (now_s - last_log_time.get(tag_name, 0.0)) >= period_s
-def mark_logged(tag_name, now_s):
-    last_log_time[tag_name] = now_s
+    if rr is None:
+        raise RuntimeError(f"No response reading %MW{start_mw}..%MW{start_mw+count-1}")
+    if hasattr(rr, "isError") and rr.isError():
+        fc = getattr(rr, "function_code", None)
+        ec = getattr(rr, "exception_code", None)
+        raise RuntimeError(f"Modbus exception %MW{start_mw}..%MW{start_mw+count-1}: function={fc} exception={ec} ({rr})")
+    regs = getattr(rr, "registers", None)
+    if regs is None:
+        raise RuntimeError(f"Malformed response for %MW{start_mw}..%MW{start_mw+count-1}: {rr!r}")
+    return regs
 
-def read_tag_from_words(words, tag):
-    # tolerate either "type" (logger-defined) or "dtype" (DB/tag_meta-defined)
-    typ = (tag.get("type") or tag.get("dtype"))
-    if not typ:
-        raise KeyError(f"Tag missing 'type'/'dtype': name={tag.get('name')} mw={tag.get('mw')} tag={tag}")
-    v = decode_in_status_window(words, tag["mw"], typ.upper())
-    if v is None:
-        return None
-    v *= float(tag.get("scale", 1.0))
-    return v
+def decode_from_window(words, win_start_mw, tag):
+    """Decode a tag value from a pre-read window."""
+    idx = tag["mw"] - win_start_mw
+    if idx < 0 or idx >= len(words): return None
+    dtype = (tag.get("dtype") or tag.get("type","INT16")).upper()
+    if dtype == "INT16":   v = float(to_int16(words[idx]))
+    elif dtype == "UINT16": v = float(to_uint16(words[idx]))
+    elif dtype in ("INT32", "UINT32", "FLOAT32"):
+        if idx+1 >= len(words): return None
+        hi, lo = words[idx], words[idx+1]
+        if dtype == "INT32":   v = float(to_int32(hi, lo))
+        elif dtype == "UINT32": v = float(to_uint32(hi, lo))
+        else:                  v = float(to_float32(hi, lo))
+    else:
+        raise ValueError(f"Unknown dtype {dtype}")
+    return v * float(tag.get("scale", 1.0))
 
+# ------------------ Per-tag logging policy ------------------
+last_value  = {}  # name -> last numeric value (float)
+last_logged = {}  # name -> epoch seconds of last DB write
+
+def due_every(name, now_s, interval_s):
+    return (now_s - last_logged.get(name, 0.0)) >= float(interval_s)
+
+def mark_logged(name, now_s):
+    last_logged[name] = float(now_s)
+
+def changed_enough(prev, cur, deadband_abs=None, deadband_pct=None):
+    if prev is None:
+        return True
+    if deadband_abs is not None and abs(cur - prev) > float(deadband_abs):
+        return True
+    if deadband_pct is not None:
+        base = max(abs(prev), 1e-9)
+        if abs(cur - prev) / base * 100.0 > float(deadband_pct):
+            return True
+    return False
+
+def eval_condition(cond, values_by_name):
+    """cond = {'tag':'P1_Status', 'op':'==', 'value':1} -> bool"""
+    if not cond: return False
+    lhs = values_by_name.get(cond.get("tag"))
+    if lhs is None: return False
+    rhs = cond.get("value")
+    op  = cond.get("op", "==")
+    try:
+        if op == "==": return lhs == rhs
+        if op == "!=": return lhs != rhs
+        if op == ">":  return lhs >  rhs
+        if op == ">=": return lhs >= rhs
+        if op == "<":  return lhs <  rhs
+        if op == "<=": return lhs <= rhs
+    except Exception:
+        return False
+    return False
+
+# ------------------ Main loop ------------------
 def main():
     ensure_schema()
+    upsert_tag_meta_from_tags()
 
-    # one-time publish of metadata so the web UI can read labels/units
-    all_tags = P1_TAGS + P2_TAGS + SYSTEM_TAGS + SETPOINTS
-    upsert_tag_meta(all_tags)
-
-    # helpful debug to see counts
-    p1_count = sum(1 for t in all_tags if t["name"].startswith("P1_"))
-    p2_count = sum(1 for t in all_tags if t["name"].startswith("P2_"))
-    sys_count = sum(1 for t in all_tags if not t["name"].startswith(("P1_","P2_")))
-    log.info(f"tag_meta upserted: P1={p1_count} P2={p2_count} other={sys_count}")
+    # Precompute minimal contiguous %MW window
+    def width(t):
+        dt = (t.get("dtype") or t.get("type","INT16")).upper()
+        return 2 if dt in ("INT32","UINT32","FLOAT32") else 1
+    WIN_START = min(t["mw"] for t in TAGS)
+    WIN_END   = max(t["mw"] + width(t) - 1 for t in TAGS)
+    WIN_COUNT = WIN_END - WIN_START + 1
+    log.info(f"Reading window %MW{WIN_START}..%MW{WIN_END} ({WIN_COUNT} regs)")
 
     pending, last_flush = [], time.time()
     consecutive_errors = 0
-    error_backoff_min = 0.5
-    error_backoff_max = 5.0
+    backoff_min, backoff_max = 0.5, 5.0
 
     while True:
         try:
-            words = read_words(STATUS_WINDOW_START, STATUS_COUNT)
+            regs = read_words(WIN_START, WIN_COUNT)
+            if len(regs) != WIN_COUNT:
+                log.warning(f"Expected {WIN_COUNT} regs, got {len(regs)}")
+
             now_iso = datetime.utcnow().isoformat()
             now_s   = time.time()
 
-            # determine pump run/idle
-            p1_status = int(read_tag_from_words(words, {"mw":P1_BASE+12,"type":"UINT16"}) or 0)
-            p2_status = int(read_tag_from_words(words, {"mw":P2_BASE+12,"type":"UINT16"}) or 0)
-            p1_cad = FAST_SEC if p1_status == 1 else SLOW_SEC
-            p2_cad = FAST_SEC if p2_status == 1 else SLOW_SEC
+            # 1) Decode all current values once
+            cur_vals = {}
+            for t in TAGS:
+                try:
+                    val = decode_from_window(regs, WIN_START, t)
+                except Exception as e:
+                    log.warning(f"Decode error {t.get('name')} @%MW{t.get('mw')}: {e}")
+                    val = None
+                cur_vals[t["name"]] = val
 
-            # pump 1
-            for t in P1_TAGS:
-                v = read_tag_from_words(words, t)
-                if v is None: continue
-                if due(t["name"], now_s, p1_cad):
-                    pending.append((now_iso, t["name"], float(v), t.get("unit","")))
-                    mark_logged(t["name"], now_s)
+            # 2) Apply per-tag logging policy
+            for t in TAGS:
+                name = t["name"]
+                val  = cur_vals.get(name)
+                if val is None:
+                    continue
 
-            # pump 2
-            for t in P2_TAGS:
-                v = read_tag_from_words(words, t)
-                if v is None: continue
-                if due(t["name"], now_s, p2_cad):
-                    pending.append((now_iso, t["name"], float(v), t.get("unit","")))
-                    mark_logged(t["name"], now_s)
+                mode = (t.get("mode") or "interval").lower()
 
-            # system tags fixed cadence
-            for t in SYSTEM_TAGS:
-                v = read_tag_from_words(words, t)
-                if v is None: continue
-                if due(t["name"], now_s, SYS_SEC):
-                    pending.append((now_iso, t["name"], float(v), t.get("unit","")))
-                    mark_logged(t["name"], now_s)
+                if mode == "interval":
+                    interval = float(t.get("interval_sec", 60.0))
+                    if due_every(name, now_s, interval):
+                        pending.append((now_iso, name, float(val), t.get("unit","")))
+                        mark_logged(name, now_s)
 
-            # flush roughly once per second
-            if time.time() - last_flush >= 1.0 and pending:
+                elif mode == "on_change":
+                    prev = last_value.get(name)
+                    db_abs = t.get("deadband_abs", None)
+                    db_pct = t.get("deadband_pct", None)
+                    min_int = float(t.get("min_interval_sec", 0.0))
+                    if changed_enough(prev, float(val), db_abs, db_pct) and due_every(name, now_s, min_int):
+                        pending.append((now_iso, name, float(val), t.get("unit","")))
+                        mark_logged(name, now_s)
+
+                elif mode == "conditional":
+                    cond = t.get("condition", {})
+                    if eval_condition(cond, cur_vals):
+                        # while condition true, log at FAST_SEC
+                        if due_every(name, now_s, float(FAST_SEC)):
+                            pending.append((now_iso, name, float(val), t.get("unit","")))
+                            mark_logged(name, now_s)
+                    else:
+                        # when false, optional idle cadence (default 10 min)
+                        idle_int = float(t.get("idle_interval_sec", 600.0))
+                        if idle_int > 0 and due_every(name, now_s, idle_int):
+                            pending.append((now_iso, name, float(val), t.get("unit","")))
+                            mark_logged(name, now_s)
+
+                else:
+                    log.warning(f"Unknown mode '{mode}' for {name}")
+
+                # update last_value after decision
+                last_value[name] = float(val)
+
+            # 3) Flush ~1 Hz
+            if pending and (time.time() - last_flush) >= 1.0:
                 write_rows(pending)
-                set_state_many = [
+                set_state_many([
                     ("connected", 1),
                     ("last_read_ok", 1),
                     ("consecutive_errors", consecutive_errors),
                     ("last_read_epoch", now_s),
                     ("last_flush_epoch", time.time()),
                     ("rows_written_last_flush", len(pending)),
-                ]
-                # write to state
-                con = sqlite3.connect(DB, timeout=30); cur = con.cursor()
-                cur.executemany("""
-                    INSERT INTO state(key, value) VALUES(?,?)
-                    ON CONFLICT(key) DO UPDATE SET value=excluded.value
-                """, [(k, float(v)) for k, v in set_state_many])
-                con.commit(); con.close()
-
+                ])
                 pending.clear()
                 last_flush = time.time()
 
             consecutive_errors = 0
-            time.sleep(SAMPLE_SEC)
+            time.sleep(float(SAMPLE_SEC))
 
         except Exception as e:
             consecutive_errors += 1
-            backoff = min(error_backoff_min * (2 ** min(consecutive_errors, 6)), error_backoff_max)
-            backoff += random.uniform(0, 0.2)
-
+            backoff = min(backoff_min * (2 ** min(consecutive_errors, 6)), backoff_max) + random.uniform(0, 0.2)
             if consecutive_errors in (1, 5) or consecutive_errors % 20 == 0:
                 log.warning(f"Modbus read error (#{consecutive_errors}): {e} — backing off {backoff:.2f}s")
-
-            # update state on error
-            con = sqlite3.connect(DB, timeout=30); cur = con.cursor()
-            cur.executemany("""
-                INSERT INTO state(key, value) VALUES(?,?)
-                ON CONFLICT(key) DO UPDATE SET value=excluded.value
-            """, [("connected", 0), ("last_read_ok", 0), ("consecutive_errors", consecutive_errors)])
-            con.commit(); con.close()
-
+            set_state_many([
+                ("connected", 0),
+                ("last_read_ok", 0),
+                ("consecutive_errors", consecutive_errors),
+            ])
             time.sleep(backoff)
-
-            # force reconnect
+            # force clean reconnect next loop
             with _client_lock:
                 if _client:
                     try: _client.close()
