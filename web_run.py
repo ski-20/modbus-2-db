@@ -2,7 +2,7 @@
 
 #!/usr/bin/env python3
 import os
-from webapp import create_app   # pulls from web/__init__.py
+from web import create_app   # pulls from web/__init__.py
 
 app = create_app()
 
