@@ -5,7 +5,7 @@ import os, sys
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, BASE_DIR)
 
-from webapp import create_app   # imports from webapp/__init__.py
+from web import create_app   # imports from webapp/__init__.py
 
 app = create_app()
 
