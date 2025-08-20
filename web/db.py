@@ -131,22 +131,16 @@ def read_state() -> Dict[str, Any]:
         return {}
 
 # web/db.py
-
-# … keep your other imports …
+# setpoints import
 try:
-    from config import SETPOINTS
+    from tags import SETPOINTS as TAGS_SETPOINTS
 except Exception:
-    # minimal fallback so the page renders, update as needed
-    SETPOINTS = []
+    TAGS_SETPOINTS = []
 
 def fetch_setpoints():
-    """
-    Return setpoints as a list of dicts:
-    [{'name','label','unit','mw','dtype'}, ...]
-    Source of truth: config.SETPOINTS
-    """
+    """Return setpoints as list of dicts for the UI."""
     rows = []
-    for sp in SETPOINTS:
+    for sp in TAGS_SETPOINTS:
         rows.append({
             "name":  sp["name"],
             "label": sp.get("label", sp["name"]),
@@ -155,5 +149,4 @@ def fetch_setpoints():
             "dtype": sp.get("type", sp.get("dtype", "FLOAT32")),
         })
     return rows
-
 
