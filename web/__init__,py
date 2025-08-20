@@ -1,17 +1,20 @@
 #Flask app + blueprints
 
-from flask import Flask
-from .routes_ui import ui_bp
-from .routes_api import api_bp
+#!/usr/bin/env python3
+import os, sys
 
-def create_app():
-    app = Flask(__name__, static_folder="static", template_folder="templates")
-    app.register_blueprint(ui_bp)
-    app.register_blueprint(api_bp, url_prefix="/api")
+# Ensure the repo root is first on sys.path so "web" resolves to package
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+sys.path.insert(0, BASE_DIR)
 
-    @app.route("/healthz")
-    def healthz():
-        return "ok", 200
+from web import create_app  # imports from web/__init__.py
 
-    return app
+app = create_app()
+
+if __name__ == "__main__":
+    host = os.environ.get("FLASK_HOST", "0.0.0.0")
+    port = int(os.environ.get("FLASK_PORT", "8080"))
+    debug = os.environ.get("FLASK_DEBUG", "0") == "1"
+    app.run(host=host, port=port, debug=debug)
+
 
