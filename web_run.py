@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
 import os, sys
 
-# Make sure the repo root (this file's dir) is on sys.path first
+# Ensure the repo root (this file's dir) is first on sys.path
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, BASE_DIR)
 
-from webapp import create_app  # imports from web/__init__.py
+from webapp import create_app   # imports from webapp/__init__.py
 
 app = create_app()
 
