@@ -1,10 +1,10 @@
 # routes_ui.py
 from flask import Blueprint, request, jsonify, make_response, render_template
-from db_utils import (
+from .db import (
     list_tags, tag_label_map, query_logs, download_csv,
     read_state, fetch_setpoints, fmt_local_epoch
 )
-from modbus_utils import mb_client, float_to_words, read_setpoint_block_dyn
+from .modbus import mb_client, float_to_words, read_setpoint_block_dyn
 
 ui_bp = Blueprint("ui", __name__)
 

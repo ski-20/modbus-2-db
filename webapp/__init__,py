@@ -1,5 +1,6 @@
 # Flask app + blueprints (PACKAGE INITIALIZER)
 
+# webapp/__init__.py
 from flask import Flask
 from .routes_ui import ui_bp
 from .routes_api import api_bp
@@ -14,3 +15,4 @@ def create_app():
         return "ok", 200
 
     return app
+
