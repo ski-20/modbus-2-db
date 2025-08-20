@@ -130,11 +130,30 @@ def read_state() -> Dict[str, Any]:
     except Exception:
         return {}
 
-def fetch_setpoints() -> list[dict]:
-    with db() as con:
-        return [dict(r) for r in con.execute("""
-            SELECT name, label, unit, mw, dtype
-            FROM tag_meta
-            WHERE is_setpoint = 1
-            ORDER BY name
-        """)]
+# web/db.py
+
+# … keep your other imports …
+try:
+    from config import SETPOINTS
+except Exception:
+    # minimal fallback so the page renders, update as needed
+    SETPOINTS = []
+
+def fetch_setpoints():
+    """
+    Return setpoints as a list of dicts:
+    [{'name','label','unit','mw','dtype'}, ...]
+    Source of truth: config.SETPOINTS
+    """
+    rows = []
+    for sp in SETPOINTS:
+        rows.append({
+            "name":  sp["name"],
+            "label": sp.get("label", sp["name"]),
+            "unit":  sp.get("unit", ""),
+            "mw":    sp["mw"],
+            "dtype": sp.get("type", sp.get("dtype", "FLOAT32")),
+        })
+    return rows
+
+
