@@ -8,3 +8,6 @@ PLC_PORT   = 502
 SLAVE_ID   = 1
 WORD_ORDER = "HL"   # "HL" = HI word first; "LH" = LO word first
 
+# Timezone for web display. Logger/db always uses UTC
+LOCAL_TZ = "America/New_York"   # e.g., "America/New_York", "UTC", etc.
+

@@ -7,23 +7,24 @@ from typing import Optional
 # ======= CONFIG (keep in sync with logger.py) =======
 DB = "/home/ele/plc_logger/plc.db"
 
-# Timezone for display (DB stays UTC)
-try:
-    from zoneinfo import ZoneInfo   # Python 3.9+
-    LOCAL_TZ = ZoneInfo("America/Chicago")  
-except Exception:
-    from dateutil import tz
-    LOCAL_TZ = tz.gettz("America/Chicago")
-
 # replace current DB/Modbus constants with:
 try:
-    from config import DB, USE_MODBUS, PLC_IP, PLC_PORT, SLAVE_ID, WORD_ORDER, LOCAL_TZ
+    from config import DB, USE_MODBUS, PLC_IP, PLC_PORT, SLAVE_ID, WORD_ORDER, LOCAL_TZ as LOCAL_TZ_NAME
 except Exception:
     # sensible fallbacks if config.py isn't available
     DB = "/home/ele/plc_logger/plc.db"
     USE_MODBUS = True
     PLC_IP, PLC_PORT, SLAVE_ID = "10.0.0.1", 502, 1
     WORD_ORDER = "HL"
+    LOCAL_TZ_NAME = "UTC"
+
+# Timezone for display (DB stays UTC)
+try:
+    from zoneinfo import ZoneInfo   # Python 3.9+
+    LOCAL_TZ = ZoneInfo(LOCAL_TZ_NAME)  
+except Exception:
+    from dateutil import tz
+    LOCAL_TZ = tz.gettz(LOCAL_TZ_NAME)
 
 # =====================================================
 
