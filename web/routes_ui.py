@@ -39,11 +39,16 @@ def status_page():
         s["last_flush_epoch_local"] = fmt_local_epoch(s.get("last_flush_epoch"))
     return render_template("status.html", title="Status", s=s)
 
-@ui_bp.route("/setpoints", methods=["GET","POST"])
+@ui_bp.route("/setpoints", methods=["GET", "POST"])
 def setpoints():
     msg = ""
     labels = tag_label_map()
-    sps = fetch_setpoints()  # [{'name','label','unit','mw','dtype'}, ...]
+    sps = fetch_setpoints()  # from config.py
+
+    if not sps:
+        msg = "No setpoints configured. Add SETPOINTS in config.py."
+        return render_template("setpoints.html", title="Setpoints",
+                               msg=msg, labels=labels, sps=[], values={})
 
     if request.method == "POST":
         name = (request.form.get("name") or (request.json or {}).get("name") or "").strip()
@@ -51,7 +56,7 @@ def setpoints():
         sp = next((x for x in sps if x["name"] == name), None)
         try:
             fval = float(value)
-        except:
+        except Exception:
             fval = None
 
         if not sp or fval is None:
@@ -62,12 +67,12 @@ def setpoints():
                 return make_response("Modbus not enabled on server", 500)
             try:
                 if sp["dtype"].upper() == "INT16":
-                    r = c.write_register(address=sp["mw"], value=int(fval), slave=1)
-                    ok = not (hasattr(r,"isError") and r.isError())
+                    r = c.write_register(address=sp["mw"], value=int(fval))
+                    ok = not (hasattr(r, "isError") and r.isError())
                 else:
                     hi, lo = float_to_words(fval)
-                    r = c.write_registers(address=sp["mw"], values=[hi, lo], slave=1)
-                    ok = not (hasattr(r,"isError") and r.isError())
+                    r = c.write_registers(address=sp["mw"], values=[hi, lo])
+                    ok = not (hasattr(r, "isError") and r.isError())
                 pretty = labels.get(name, sp.get("label") or name)
                 msg = f"Updated {pretty}" if ok else f"Write failed for {pretty}"
             except Exception as e:
@@ -77,9 +82,5 @@ def setpoints():
     if emsg and not msg:
         msg = emsg
 
-    return render_template("setpoints.html",
-                           title="Setpoints",
-                           msg=msg,
-                           labels=labels,
-                           sps=sps,
-                           values=values)
+    return render_template("setpoints.html", title="Setpoints",
+                           msg=msg, labels=labels, sps=sps, values=values)
