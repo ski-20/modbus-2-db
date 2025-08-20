@@ -128,7 +128,7 @@ def ensure_schema():
         value REAL
       )
     """)
-    # NEW: tag metadata (stable key + pretty label + unit)
+    # tag metadata (stable key + pretty label + unit)
     cur.execute("""
       CREATE TABLE IF NOT EXISTS tag_meta (
         name  TEXT PRIMARY KEY,
@@ -213,6 +213,12 @@ def main():
     # one-time publish of metadata so the web UI can read labels/units
     all_tags = P1_TAGS + P2_TAGS + SYSTEM_TAGS + SETPOINTS
     upsert_tag_meta(all_tags)
+
+    # helpful debug to see counts
+    p1_count = sum(1 for t in all_tags if t["name"].startswith("P1_"))
+    p2_count = sum(1 for t in all_tags if t["name"].startswith("P2_"))
+    sys_count = sum(1 for t in all_tags if not t["name"].startswith(("P1_","P2_")))
+    log.info(f"tag_meta upserted: P1={p1_count} P2={p2_count} other={sys_count}")
 
     pending, last_flush = [], time.time()
     consecutive_errors = 0

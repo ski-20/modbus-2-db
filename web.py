@@ -15,31 +15,13 @@ except Exception:
     from dateutil import tz
     LOCAL_TZ = tz.gettz("America/Chicago")
 
-# Modbus setpoint write support (optional)
+# Modbus setpoint write support 
 USE_MODBUS = True
 PLC_IP   = "10.0.0.1"
 PLC_PORT = 502
 SLAVE_ID = 1
 WORD_ORDER = "HL"
 
-SETPOINTS = [
-    {"name":"WetWell_Stop_Level",          "mw":300, "type":"FLOAT32"},
-    {"name":"WetWell_Lead_Start_Level",    "mw":302, "type":"FLOAT32"},
-    {"name":"WetWell_Lag_Start_Level",     "mw":304, "type":"FLOAT32"},
-    {"name":"WetWell_High_Level",          "mw":306, "type":"FLOAT32"},
-    {"name":"WetWell_Level_Scale_0V",      "mw":308, "type":"FLOAT32"},
-    {"name":"WetWell_Level_Scale_10V",     "mw":310, "type":"FLOAT32"},
-    {"name":"Spare_Analog_IO_1",           "mw":312, "type":"FLOAT32"},
-    {"name":"Spare_Analog_IO_2",           "mw":314, "type":"FLOAT32"},
-    {"name":"Pump1_Speed_Setpoint_pct",    "mw":316, "type":"FLOAT32"},
-    {"name":"Pump2_Speed_Setpoint_pct",    "mw":318, "type":"FLOAT32"},
-    {"name":"Pump1_FailToRun_Delay_sec",   "mw":320, "type":"INT16"},
-    {"name":"Pump2_FailToRun_Delay_sec",   "mw":321, "type":"INT16"},
-    {"name":"Spare_Analog_IO_HighLevel",   "mw":322, "type":"FLOAT32"},
-]
-SETPOINT_WINDOW_START = 300
-SETPOINT_WINDOW_END   = 323
-SETPOINT_COUNT = SETPOINT_WINDOW_END - SETPOINT_WINDOW_START + 1
 # =====================================================
 
 app = Flask(__name__, static_folder="static", static_url_path="/static")
@@ -54,6 +36,17 @@ def db():
 def list_tags():
     with db() as con:
         return [r["tag"] for r in con.execute("SELECT DISTINCT tag FROM logs ORDER BY tag")]
+
+def fetch_setpoints():
+    """Read setpoint metadata published by the logger."""
+    with db() as con:
+        rows = [dict(r) for r in con.execute("""
+            SELECT name, label, unit, mw, dtype
+            FROM tag_meta
+            WHERE is_setpoint = 1
+            ORDER BY name
+        """)]
+    return rows
 
 def tag_label_map():
     """Read pretty labels from logger-published tag_meta."""
@@ -312,28 +305,62 @@ def words_to_float(hi, lo):
         hi, lo = lo, hi
     return struct.unpack(">f", struct.pack(">HH", hi, lo))[0]
 
-def read_setpoint_block():
+def read_setpoint_block_dyn(sps):
+    """
+    Read one Modbus block that spans all setpoints (min..max), then decode each.
+    Returns: (values_by_name: {name: value}, error_msg or None)
+    """
+    if not sps:
+        return {}, "No setpoints defined (tag_meta empty)."
+
     c = mb_client()
     if not c:
-        return None, "Modbus client not available"
+        return {}, "Modbus client not available"
+
+    # compute a single contiguous window covering all setpoints
+    def width(sp): return 2 if sp["dtype"].upper() == "FLOAT32" else 1
+    start = min(sp["mw"] for sp in sps)
+    end   = max(sp["mw"] + width(sp) - 1 for sp in sps)
+    count = end - start + 1
+
     try:
-        rr = c.read_holding_registers(address=SETPOINT_WINDOW_START, count=SETPOINT_COUNT, slave=SLAVE_ID)
+        rr = c.read_holding_registers(address=start, count=count, slave=SLAVE_ID)
         if hasattr(rr,"isError") and rr.isError():
-            return None, f"Modbus read error: {rr}"
-        return rr.registers, None
+            return {}, f"Modbus read error: {rr}"
+        regs = rr.registers
     except Exception as e:
-        return None, f"Modbus exception: {e}"
+        return {}, f"Modbus exception: {e}"
+
+    # decode each setpoint from the block
+    out = {}
+    for sp in sps:
+        i = sp["mw"] - start
+        try:
+            if sp["dtype"].upper() == "INT16":
+                out[sp["name"]] = regs[i]
+            else:  # FLOAT32
+                hi, lo = regs[i], regs[i+1]
+                out[sp["name"]] = words_to_float(hi, lo)
+        except Exception:
+            out[sp["name"]] = None
+    return out, None
+
 
 @app.route("/setpoints", methods=["GET","POST"])
 def setpoints():
     msg = ""
     labels = tag_label_map()
+    sps = fetch_setpoints()  # [{'name','label','unit','mw','dtype'}, ...]
+
+    if not sps and not msg:
+        msg = "Setpoint metadata not yet available. Waiting for logger to populate tag_meta."
+
     if request.method == "POST":
         if not USE_MODBUS:
             return make_response("Modbus not enabled on server", 500)
         name = (request.form.get("name") or (request.json or {}).get("name") or "").strip()
         value = (request.form.get("value") or (request.json or {}).get("value") or "").strip()
-        sp = next((s for s in SETPOINTS if s["name"] == name), None)
+        sp = next((x for x in sps if x["name"] == name), None)
         try:
             fval = float(value)
         except:
@@ -343,41 +370,32 @@ def setpoints():
         else:
             c = mb_client()
             try:
-                if sp["type"] == "INT16":
+                if sp["dtype"].upper() == "INT16":
                     r = c.write_register(address=sp["mw"], value=int(fval), slave=SLAVE_ID)
                     ok = not (hasattr(r,"isError") and r.isError())
-                else:
+                else:  # FLOAT32
                     hi, lo = float_to_words(fval)
                     r = c.write_registers(address=sp["mw"], values=[hi, lo], slave=SLAVE_ID)
                     ok = not (hasattr(r,"isError") and r.isError())
-                msg = f"Updated {labels.get(name,name)}" if ok else f"Write failed for {labels.get(name,name)}"
+                pretty = labels.get(name, sp.get("label") or name)
+                msg = f"Updated {pretty}" if ok else f"Write failed for {pretty}"
             except Exception as e:
                 msg = f"Write exception: {e}"
 
-    words, emsg = read_setpoint_block()
-    rows = []
-    if words:
-        for sp in SETPOINTS:
-            i = sp["mw"] - SETPOINT_WINDOW_START
-            val = None
-            try:
-                if sp["type"] == "INT16":
-                    val = words[i]
-                elif sp["type"] == "FLOAT32":
-                    val = words_to_float(words[i], words[i+1])
-            except Exception:
-                val = None
-            rows.append((sp["name"], sp["mw"], sp["type"], val))
-    else:
-        msg = emsg or msg or "Unable to read setpoints."
+    # read current values in one shot
+    values, emsg = read_setpoint_block_dyn(sps)
+    if emsg and not msg:
+        msg = emsg
 
+    # build UI
     names_opts = "".join([
-        f'<option value="{sp["name"]}">{labels.get(sp["name"], sp["name"])}</option>'
-        for sp in SETPOINTS
+        f'<option value="{sp["name"]}">{sp.get("label") or labels.get(sp["name"], sp["name"])}</option>'
+        for sp in sps
     ])
     table_rows = "".join([
-        f"<tr><td>{labels.get(n,n)}</td><td>%MW{mw}</td><td>{typ}</td><td>{val}</td></tr>"
-        for (n,mw,typ,val) in rows
+        f"<tr><td>{sp.get('label') or labels.get(sp['name'], sp['name'])}</td>"
+        f"<td>%MW{sp['mw']}</td><td>{sp['dtype']}</td><td>{values.get(sp['name'])}</td></tr>"
+        for sp in sps
     ])
 
     return f"""<!doctype html><html><head>
