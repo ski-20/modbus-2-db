@@ -10,17 +10,20 @@ DB = "/home/ele/plc_logger/plc.db"
 # Timezone for display (DB stays UTC)
 try:
     from zoneinfo import ZoneInfo   # Python 3.9+
-    LOCAL_TZ = ZoneInfo("America/Chicago")   # change to America/New_York if desired
+    LOCAL_TZ = ZoneInfo("America/Chicago")  
 except Exception:
     from dateutil import tz
     LOCAL_TZ = tz.gettz("America/Chicago")
 
-# Modbus setpoint write support 
-USE_MODBUS = True
-PLC_IP   = "10.0.0.1"
-PLC_PORT = 502
-SLAVE_ID = 1
-WORD_ORDER = "HL"
+# replace current DB/Modbus constants with:
+try:
+    from config import DB, USE_MODBUS, PLC_IP, PLC_PORT, SLAVE_ID, WORD_ORDER, LOCAL_TZ
+except Exception:
+    # sensible fallbacks if config.py isn't available
+    DB = "/home/ele/plc_logger/plc.db"
+    USE_MODBUS = True
+    PLC_IP, PLC_PORT, SLAVE_ID = "10.0.0.1", 502, 1
+    WORD_ORDER = "HL"
 
 # =====================================================
 

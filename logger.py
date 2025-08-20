@@ -4,11 +4,7 @@ from datetime import datetime
 from pymodbus.client import ModbusTcpClient
 
 # ------------------ CONFIG ------------------
-PLC_IP     = "10.0.0.1"
-PLC_PORT   = 502
-SLAVE_ID   = 1
-
-DB = "/home/ele/plc_logger/plc.db"
+from config import DB, PLC_IP, PLC_PORT, SLAVE_ID, WORD_ORDER
 LOG_NAME = "modbus_logger"
 
 import logging
@@ -34,57 +30,7 @@ P1_OUT_WORD_MW = None
 P2_OUT_WORD_MW = None
 
 # ---------- Tag definitions (with labels) ----------
-def pump_tags(base: int, pump_key: str, pump_label: str):
-    return [
-        {"name":f"{pump_key}_DrvStatusWord", "label":f"{pump_label} Drive Status Word",         "mw":base+0,  "type":"UINT16", "unit":""},
-        {"name":f"{pump_key}_SpeedRaw",      "label":f"{pump_label} Speed (raw)",               "mw":base+1,  "type":"INT16",  "unit":"raw"},
-        {"name":f"{pump_key}_MotorCurrent",  "label":f"{pump_label} Motor Current",             "mw":base+2,  "type":"INT16",  "scale":0.1, "unit":"A"},
-        {"name":f"{pump_key}_DCBusV",        "label":f"{pump_label} DC Bus Voltage",            "mw":base+3,  "type":"INT16",  "unit":"V"},
-        {"name":f"{pump_key}_OutV",          "label":f"{pump_label} Output Voltage",            "mw":base+4,  "type":"INT16",  "unit":"V"},
-        {"name":f"{pump_key}_TorqueRaw",     "label":f"{pump_label} Torque (raw)",              "mw":base+5,  "type":"INT16",  "unit":"raw"},
-        {"name":f"{pump_key}_FaultActive",   "label":f"{pump_label} Active Fault",              "mw":base+6,  "type":"UINT16", "unit":""},
-        {"name":f"{pump_key}_FaultPrev",     "label":f"{pump_label} Previous Fault",            "mw":base+7,  "type":"UINT16", "unit":""},
-        {"name":f"{pump_key}_Starts",        "label":f"{pump_label} Total Starts",              "mw":base+8,  "type":"INT32",  "unit":""},
-        {"name":f"{pump_key}_Hours_x10",     "label":f"{pump_label} Total Hours (x10)",         "mw":base+10, "type":"INT32",  "unit":"tenth_hr"},
-        {"name":f"{pump_key}_Status",        "label":f"{pump_label} Status (1=Running)",        "mw":base+12, "type":"UINT16", "unit":""},
-        {"name":f"{pump_key}_Mode",          "label":f"{pump_label} Mode",                      "mw":base+13, "type":"UINT16", "unit":""},
-        {"name":f"{pump_key}_OutDataWord",   "label":f"{pump_label} Output Data Word",          "mw":base+14, "type":"UINT16", "unit":""},
-    ]
-
-P1_TAGS = pump_tags(P1_BASE, "P1", "Pump 1")
-P2_TAGS = pump_tags(P2_BASE, "P2", "Pump 2")
-
-SYSTEM_TAGS = [
-    {"name":"WetWellLevel",     "label":"Wet Well Level",           "mw":440, "type":"FLOAT32", "scale":1.0, "unit":"level"},
-    {"name":"SYS1_OutDataWord", "label":"System Output Data Word",  "mw":442, "type":"INT16",               "unit":""},
-]
-SYS_SEC    = 10.0   # system tags every 10 s
-
-# Logging policy for pumps
-FAST_SEC   = 1.0     # fast log cadence when that pump is running
-SLOW_SEC   = 600.0   # slow log cadence when that pump is idle (10 min)
-SAMPLE_SEC = 0.5     # Modbus sample cadence
-
-# ===== Setpoints block (for web API) =====
-SETPOINTS = [
-    {"name":"WetWell_Stop_Level",        "label":"Wet Well Stop Level",                 "mw":300, "type":"FLOAT32"},
-    {"name":"WetWell_Lead_Start_Level",  "label":"Wet Well Lead Pump Start Level",      "mw":302, "type":"FLOAT32"},
-    {"name":"WetWell_Lag_Start_Level",   "label":"Wet Well Lag Pump Start Level",       "mw":304, "type":"FLOAT32"},
-    {"name":"WetWell_High_Level",        "label":"Wet Well High Level",                 "mw":306, "type":"FLOAT32"},
-    {"name":"WetWell_Level_Scale_0V",    "label":"Wet Well Level Scaling - 0V",         "mw":308, "type":"FLOAT32"},
-    {"name":"WetWell_Level_Scale_10V",   "label":"Wet Well Level Scaling - 10V",        "mw":310, "type":"FLOAT32"},
-    {"name":"Spare_Analog_IO_1",         "label":"Spare (future analog IO) 1",          "mw":312, "type":"FLOAT32"},
-    {"name":"Spare_Analog_IO_2",         "label":"Spare (future analog IO) 2",          "mw":314, "type":"FLOAT32"},
-    {"name":"Pump1_Speed_Setpoint_pct",  "label":"Pump 1 Speed Setpoint (%)",           "mw":316, "type":"FLOAT32"},
-    {"name":"Pump2_Speed_Setpoint_pct",  "label":"Pump 2 Speed Setpoint (%)",           "mw":318, "type":"FLOAT32"},
-    {"name":"Pump1_FailToRun_Delay_sec", "label":"Pump 1 Fail To Run Delay (sec.)",     "mw":320, "type":"INT16"},
-    {"name":"Pump2_FailToRun_Delay_sec", "label":"Pump 2 Fail To Run Delay (sec.)",     "mw":321, "type":"INT16"},
-    {"name":"Spare_Analog_IO_HighLevel", "label":"Spare (future analog IO) High Level", "mw":322, "type":"FLOAT32"},
-]
-SETPOINT_WINDOW_START = 300
-SETPOINT_WINDOW_END   = 323
-SETPOINT_COUNT = SETPOINT_WINDOW_END - SETPOINT_WINDOW_START + 1
-# --------------------------------------------
+from tags import P1_TAGS, P2_TAGS, SYSTEM_TAGS, SETPOINTS, P1_BASE, P2_BASE
 
 # Shared client
 _client_lock = threading.Lock()
