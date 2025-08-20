@@ -1,0 +1,16 @@
+{% extends "base.html" %}
+{% block content %}
+<table class="table table-sm table-striped">
+  <tbody>
+    <tr><td>connected</td><td>{{ s.connected|default('') }}</td></tr>
+    <tr><td>last_read_ok</td><td>{{ s.last_read_ok|default('') }}</td></tr>
+    <tr><td>consecutive_errors</td><td>{{ s.consecutive_errors|default('') }}</td></tr>
+    <tr><td>last_read_epoch</td><td>{{ s.last_read_epoch|default('') }}</td></tr>
+    <tr><td>last_read_local</td><td>{{ s.last_read_epoch_local|default('') }}</td></tr>
+    <tr><td>last_flush_epoch</td><td>{{ s.last_flush_epoch|default('') }}</td></tr>
+    <tr><td>last_flush_local</td><td>{{ s.last_flush_epoch_local|default('') }}</td></tr>
+    <tr><td>rows_written_last_flush</td><td>{{ s.rows_written_last_flush|default('') }}</td></tr>
+  </tbody>
+</table>
+<p>JSON: <a href="/status">/status</a></p>
+{% endblock %}

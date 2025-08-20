@@ -1,0 +1,39 @@
+{% extends "base.html" %}
+{% block content %}
+{% if msg %}<div class="alert alert-info">{{ msg }}</div>{% endif %}
+
+<form method="post" class="row g-2 mb-3">
+  <div class="col-sm-5">
+    <label class="form-label">Name</label>
+    <select class="form-select" name="name">
+      {% for sp in sps %}
+        <option value="{{ sp.name }}">{{ sp.label or labels.get(sp.name, sp.name) }}</option>
+      {% endfor %}
+    </select>
+  </div>
+  <div class="col-sm-3">
+    <label class="form-label">Value</label>
+    <input class="form-control" name="value" required>
+  </div>
+  <div class="col-sm-2 align-self-end">
+    <button class="btn btn-primary w-100" type="submit">Write</button>
+  </div>
+  <div class="col-sm-2 align-self-end">
+    <a class="btn btn-outline-secondary w-100" href="/setpoints">Refresh</a>
+  </div>
+</form>
+
+<table class="table table-sm table-striped">
+  <thead><tr><th>Name</th><th>MW</th><th>Type</th><th>Current</th></tr></thead>
+  <tbody>
+    {% for sp in sps %}
+      <tr>
+        <td>{{ sp.label or labels.get(sp.name, sp.name) }}</td>
+        <td>%MW{{ sp.mw }}</td>
+        <td>{{ sp.dtype }}</td>
+        <td>{{ values.get(sp.name) }}</td>
+      </tr>
+    {% endfor %}
+  </tbody>
+</table>
+{% endblock %}

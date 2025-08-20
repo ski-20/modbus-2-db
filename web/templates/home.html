@@ -1,0 +1,72 @@
+{% extends "base.html" %}
+{% block content %}
+<form id="f" class="row g-2 mb-3">
+  <div class="col-sm-4">
+    <label class="form-label">Tag</label>
+    <select class="form-select" name="tag">
+      <option value="" {% if not selections.tag %}selected{% endif %}>(all)</option>
+      {% for t in tags %}
+        <option value="{{ t }}" {% if selections.tag==t %}selected{% endif %}>
+          {{ labels.get(t, t)|replace('_',' ') }}
+        </option>
+      {% endfor %}
+    </select>
+  </div>
+  <div class="col-sm-2">
+    <label class="form-label">Last minutes</label>
+    <input class="form-control" name="mins" value="{{ selections.mins }}">
+  </div>
+  <div class="col-sm-2">
+    <label class="form-label">Limit</label>
+    <input class="form-control" name="limit" value="{{ selections.limit }}">
+  </div>
+  <div class="col-sm-2">
+    <label class="form-label">Bucket (sec, optional)</label>
+    <input class="form-control" name="bucket_s" value="{{ selections.bucket_s }}">
+  </div>
+  <div class="col-sm-2 align-self-end">
+    <button class="btn btn-primary w-100" type="submit">Load</button>
+  </div>
+</form>
+
+<div class="mb-2">
+  <a id="dl" class="btn btn-outline-secondary btn-sm" href="#">Download CSV</a>
+</div>
+
+<div class="table-responsive">
+  <table class="table table-sm table-striped" id="tbl">
+    <thead>
+      <tr><th>Timestamp (Local)</th><th>Tag</th><th>Value</th><th>Unit</th></tr>
+    </thead>
+    <tbody></tbody>
+  </table>
+</div>
+
+<script>
+const f = document.getElementById('f');
+const tbody = document.querySelector('#tbl tbody');
+const dl = document.getElementById('dl');
+
+async function loadTable() {
+  const p = new URLSearchParams(new FormData(f));
+  dl.href = '/api/download.csv?' + p.toString();
+  const r = await fetch('/api/logs?' + p.toString());
+  const rows = await r.json();
+  tbody.innerHTML = rows.map(function(row) {
+    return '<tr>'
+      + '<td>' + (row.ts_fmt || row.ts) + '</td>'
+      + '<td>' + (row.tag_label || row.tag) + '</td>'
+      + '<td>' + row.value + '</td>'
+      + '<td>' + (row.unit || '') + '</td>'
+      + '</tr>';
+  }).join('');
+}
+
+f.addEventListener('submit', function(e) {
+  e.preventDefault();
+  loadTable();
+});
+
+loadTable();
+</script>
+{% endblock %}
