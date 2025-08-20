@@ -5,11 +5,13 @@ from .routes_ui import ui_bp
 from .routes_api import api_bp
 
 def create_app():
-    app = Flask(__name__)
+    app = Flask(__name__, static_folder="static", template_folder="templates")
     app.register_blueprint(ui_bp)
     app.register_blueprint(api_bp, url_prefix="/api")
 
-    # static bootstrap from web/static
-    # (Jinja templates will link to /static/bootstrap.min.css)
-    app.static_folder = "static"
+    @app.route("/healthz")
+    def healthz():
+        return "ok", 200
+
     return app
+
