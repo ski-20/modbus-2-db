@@ -36,6 +36,19 @@ P2_OUT_WORD_MW = None
 # ---------- Tag definitions (with labels) ----------
 from tags import P1_TAGS, P2_TAGS, SYSTEM_TAGS, SETPOINTS, P1_BASE, P2_BASE
 
+def _validate_tags(name, tags):
+    req = {"name","mw"}
+    for t in tags:
+        missing = [k for k in req if k not in t]
+        if missing:
+            log.error(f"{name}: tag missing {missing}: {t}")
+        if "type" not in t and "dtype" not in t:
+            log.error(f"{name}: tag missing 'type'/'dtype': {t}")
+
+_validate_tags("P1_TAGS", P1_TAGS)
+_validate_tags("P2_TAGS", P2_TAGS)
+_validate_tags("SYSTEM_TAGS", SYSTEM_TAGS)
+
 # Shared client
 _client_lock = threading.Lock()
 _client = None
@@ -109,13 +122,21 @@ def write_rows(rows):
 # ------------- Modbus helpers -------------
 def read_words(start_mw, count):
     cli = get_client()
-    rr = cli.read_holding_registers(address=start_mw, count=count, slave=SLAVE_ID)
+    try:
+        rr = cli.read_holding_registers(address=start_mw, count=count)
+    except Exception as e:
+        raise RuntimeError(f"Socket/transport error reading %MW{start_mw}..%MW{start_mw+count-1}: {e}")
+
+    if rr is None:
+        raise RuntimeError(f"No response reading %MW{start_mw}..%MW{start_mw+count-1}")
     if hasattr(rr, "isError") and rr.isError():
         fc = getattr(rr, "function_code", None)
         ec = getattr(rr, "exception_code", None)
-        raise RuntimeError(f"Modbus exception: function={fc} exception={ec} addr={start_mw} count={count}")
-    if rr is None or not hasattr(rr, "registers"):
-        raise RuntimeError(f"Modbus read returned no data for address={start_mw} count={count}")
+        raise RuntimeError(
+            f"Modbus exception %MW{start_mw}..%MW{start_mw+count-1}: function={fc} exception={ec} ({rr})"
+        )
+    if not hasattr(rr, "registers") or rr.registers is None:
+        raise RuntimeError(f"Malformed response for %MW{start_mw}..%MW{start_mw+count-1}: {rr!r}")
     return rr.registers
 
 def to_int16(w):   return w - 65536 if w >= 32768 else w
@@ -152,8 +173,13 @@ def mark_logged(tag_name, now_s):
     last_log_time[tag_name] = now_s
 
 def read_tag_from_words(words, tag):
-    v = decode_in_status_window(words, tag["mw"], tag["type"].upper())
-    if v is None: return None
+    # tolerate either "type" (logger-defined) or "dtype" (DB/tag_meta-defined)
+    typ = (tag.get("type") or tag.get("dtype"))
+    if not typ:
+        raise KeyError(f"Tag missing 'type'/'dtype': name={tag.get('name')} mw={tag.get('mw')} tag={tag}")
+    v = decode_in_status_window(words, tag["mw"], typ.upper())
+    if v is None:
+        return None
     v *= float(tag.get("scale", 1.0))
     return v
 
