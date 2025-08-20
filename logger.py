@@ -18,6 +18,7 @@ log = logging.getLogger(LOG_NAME)
 FAST_SEC = 1      # fast cycle for high-priority tags
 SLOW_SEC = 10     # slow cycle for less frequent tags
 SYS_SEC = 30      # system health status
+SAMPLE_SEC = 0.5  # Modbus polling rate
 
 # "HL" => [%MWn=HI, %MWn+1=LO]; flip to "LH" if PLC uses low-word first
 WORD_ORDER = "HL"
