@@ -2,10 +2,10 @@
 from flask import Blueprint, request, jsonify, make_response, render_template
 
 from .db import (
-    list_tags_with_labels,      # <-- NEW
-    tag_label_map,
-    query_logs, download_csv, read_state, fetch_setpoints, fmt_local_epoch
+    list_tags_with_labels,
+    tag_label_map, query_logs, download_csv, read_state, fetch_setpoints, fmt_local_epoch
 )
+
 
 from .modbus import mb_client, float_to_words, read_setpoint_block_dyn
 
@@ -18,7 +18,7 @@ def home():
     cur_limit  = request.args.get("limit", "500")
     cur_bucket = request.args.get("bucket_s", "")
 
-    tags = list_tags()
+    tags = list_tags_with_labels()
     labels = tag_label_map()
     selections = {
         "tag": cur_tag,

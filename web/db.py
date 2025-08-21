@@ -37,10 +37,12 @@ def tag_label_map() -> Dict[str, str]:
 
 def list_tags_with_labels():
     with db() as con:
-        return [
-            {"tag": r["name"], "label": r["label"]}
-            for r in con.execute("SELECT name, label FROM tag_meta ORDER BY name")
-        ]
+        rows = con.execute("""
+            SELECT tag, COALESCE(label, tag) AS label
+            FROM tag_meta
+            ORDER BY label COLLATE NOCASE
+        """).fetchall()
+        return [dict(r) for r in rows]
 
 def _pretty_tag_fallback(t: str) -> str:
     s = t.replace('_',' ')
