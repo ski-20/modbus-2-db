@@ -1,7 +1,7 @@
 # API routes: /api/logs, /api/download.csv
 
 from flask import Blueprint, request, jsonify, make_response
-from .db import query_logs, download_csv, tag_label_map, _pretty_tag_fallback
+from .db import db, query_logs, download_csv, tag_label_map, _pretty_tag_fallback
 
 from datetime import datetime, timedelta, timezone, date
 
