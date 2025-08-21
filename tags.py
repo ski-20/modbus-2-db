@@ -74,7 +74,7 @@ TAGS = (
 
 
 SETPOINTS = [
-    {"name":"WetWell_Stop_Level",        "label":"Wet Well Stop Level",                 "mw":300, "dtype":"FLOAT32"},
+    {"name":"WetWell_Stop_Level",        "label":"Wet Well Stop Level",                 "mw":300, "dtype":"FLOAT32", "unit": "In."},
     {"name":"WetWell_Lead_Start_Level",  "label":"Wet Well Lead Pump Start Level",      "mw":302, "dtype":"FLOAT32"},
     {"name":"WetWell_Lag_Start_Level",   "label":"Wet Well Lag Pump Start Level",       "mw":304, "dtype":"FLOAT32"},
     {"name":"WetWell_High_Level",        "label":"Wet Well High Level",                 "mw":306, "dtype":"FLOAT32"},
