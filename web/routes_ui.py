@@ -2,11 +2,10 @@
 from flask import Blueprint, request, jsonify, make_response, render_template
 
 from .db import (
-    list_tags_with_labels,
-    tag_label_map, query_logs, download_csv, read_state, fetch_setpoints, fmt_local_epoch
+    list_tags_with_labels,    # <-- use objects (tag,label)
+    tag_label_map,
+    query_logs, download_csv, read_state, fetch_setpoints, fmt_local_epoch
 )
-
-
 from .modbus import mb_client, float_to_words, read_setpoint_block_dyn
 
 ui_bp = Blueprint("ui", __name__)
@@ -14,23 +13,24 @@ ui_bp = Blueprint("ui", __name__)
 @ui_bp.route("/")
 def home():
     cur_tag    = request.args.get("tag", "").strip()
-    cur_mins   = request.args.get("mins", "60")
     cur_limit  = request.args.get("limit", "500")
     cur_bucket = request.args.get("bucket_s", "")
+    cur_cal    = request.args.get("cal", "all").strip().lower()  # default to (all)
 
-    tags = list_tags_with_labels()
-    labels = tag_label_map()
+    tags = list_tags_with_labels()  # list of {'tag','label'}
     selections = {
         "tag": cur_tag,
-        "mins": cur_mins,
         "limit": cur_limit,
         "bucket_s": cur_bucket,
+        "cal": cur_cal,
     }
-    return render_template("home.html",
-                           title="PLC Logger UI",
-                           tags=tags,
-                           labels=labels,
-                           selections=selections)
+    return render_template(
+        "home.html",
+        title="PLC Logger UI",
+        tags=tags,
+        selections=selections
+    )
+
 
 @ui_bp.route("/status_page")
 def status_page():

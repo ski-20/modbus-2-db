@@ -1,44 +1,47 @@
 {% extends "base.html" %}
 {% block content %}
-<form id="f" class="row g-2 mb-3">
+
+<div class="row g-2 mb-3">
   <div class="col-md-4">
     <label class="form-label">Tag</label>
-    <select class="form-select" name="tag">
-    <option value="">(all)</option>
-    {% for r in tags %}
-      <option value="{{ r.tag }}" {% if r.tag == cur_tag %}selected{% endif %}>
-        {{ r.label }}
-      </option>
-    {% endfor %}
-  </select>
+    <select class="form-select" name="tag" id="tag">
+      <option value="">(all)</option>
+      {% for r in tags %}
+        <option value="{{ r.tag }}" {% if r.tag == selections.tag %}selected{% endif %}>
+          {{ r.label }}
+        </option>
+      {% endfor %}
+    </select>
   </div>
 
   <div class="col-md-3">
     <label class="form-label">Calendar Range</label>
     <select class="form-select" name="cal" id="cal">
-      <option value="all">(all)</option>
-      <option value="today" selected>Today</option>
-      <option value="yesterday">Yesterday</option>
-      <option value="week">This Week</option>
-      <option value="month">This Month</option>
-      <option value="year">This Year</option>
+      <option value="all" {% if selections.cal == 'all' %}selected{% endif %}>(all)</option>
+      <option value="today" {% if selections.cal == 'today' %}selected{% endif %}>Today</option>
+      <option value="yesterday" {% if selections.cal == 'yesterday' %}selected{% endif %}>Yesterday</option>
+      <option value="week" {% if selections.cal == 'week' %}selected{% endif %}>This Week</option>
+      <option value="month" {% if selections.cal == 'month' %}selected{% endif %}>This Month</option>
+      <option value="year" {% if selections.cal == 'year' %}selected{% endif %}>This Year</option>
     </select>
   </div>
 
   <div class="col-md-2">
     <label class="form-label">Limit</label>
-    <input type="number" class="form-control" name="limit" id="limit" value="{{ request.args.get('limit', 500) }}">
+    <input type="number" class="form-control" name="limit" id="limit"
+           value="{{ selections.limit or 500 }}">
   </div>
 
   <div class="col-md-2">
     <label class="form-label">Bucket (sec, optional)</label>
-    <input class="form-control" name="bucket_s" value="{{ cur_bucket }}">
+    <input type="number" class="form-control" name="bucket_s" id="bucket_s"
+           value="{{ selections.bucket_s or '' }}">
   </div>
 
   <div class="col-md-1 align-self-end">
-    <button class="btn btn-primary w-100" type="submit">Load</button>
+    <button class="btn btn-primary w-100" id="loadBtn">Load</button>
   </div>
-</form>
+</div>
 
 <div class="mb-2">
   <a id="dl" class="btn btn-outline-secondary btn-sm" href="#">Download CSV</a>
@@ -47,42 +50,67 @@
 <div class="table-responsive">
   <table class="table table-sm table-striped" id="tbl">
     <thead>
-      <tr><th>Timestamp (Local)</th><th>Tag</th><th>Value</th><th>Unit</th></tr>
+      <tr>
+        <th>Timestamp (Local)</th>
+        <th>Tag</th>
+        <th>Value</th>
+        <th>Unit</th>
+      </tr>
     </thead>
     <tbody></tbody>
   </table>
 </div>
 
+{% endblock %}
+
+{% block scripts %}
 <script>
-const f = document.getElementById('f');
-const tbody = document.querySelector('#tbl tbody');
-const dl = document.getElementById('dl');
+function qs(id){ return document.getElementById(id); }
 
-async function loadTable() {
-  const p = new URLSearchParams(new FormData(f));
-  // Clean legacy params if they still exist
-  p.delete('mins'); p.delete('range'); p.delete('start'); p.delete('end');
-
-  dl.href = '/api/download.csv?' + p.toString();
-  const r = await fetch('/api/logs?' + p.toString());
-  const rows = await r.json();
-  tbody.innerHTML = rows.map(row => (
-    `<tr>
-      <td>${row.ts_fmt || row.ts}</td>
-      <td>${row.label || row.tag}</td>
-      <td>${row.value}</td>
-      <td>${row.unit || ''}</td>
-    </tr>`
-  )).join('');
+function buildParams(){
+  const p = new URLSearchParams();
+  const tag = qs('tag').value.trim();
+  const cal = qs('cal').value || 'all';
+  const limit = qs('limit').value || '500';
+  const bucket = qs('bucket_s').value || '';
+  if (tag) p.set('tag', tag);
+  p.set('cal', cal);
+  p.set('limit', limit);
+  if (bucket) p.set('bucket_s', bucket);
+  return p;
 }
 
-f.addEventListener('submit', (e) => {
+async function loadTable() {
+  const p = buildParams();
+  // CSV link
+  qs('dl').href = '/api/download.csv?' + p.toString();
+
+  const r = await fetch('/api/logs?' + p.toString());
+  const rows = await r.json();
+
+  const tbody = document.querySelector('#tbl tbody');
+  tbody.innerHTML = rows.map(row => {
+    const ts = row.ts_fmt || row.ts;                // pretty local timestamp
+    const label = row.label || row.tag;             // friendly label
+    const val = (typeof row.value === 'number')
+                ? row.value.toFixed(1)              // 1 decimal on web only
+                : row.value;
+    const unit = row.unit || '';
+    return `<tr>
+      <td>${ts}</td>
+      <td>${label}</td>
+      <td>${val}</td>
+      <td>${unit}</td>
+    </tr>`;
+  }).join('');
+}
+
+qs('loadBtn').addEventListener('click', (e) => {
   e.preventDefault();
   loadTable();
 });
 
-// auto-load first paint
+// auto-load on first paint
 loadTable();
 </script>
-
 {% endblock %}

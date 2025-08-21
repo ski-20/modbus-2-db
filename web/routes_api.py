@@ -2,7 +2,6 @@
 
 from flask import Blueprint, request, jsonify, make_response
 from .db import db, download_csv, tag_label_map, fmt_local_epoch, query_logs_between
-
 from datetime import datetime, timedelta, timezone, date
 
 try:
@@ -75,68 +74,33 @@ api_bp = Blueprint("api", __name__)
 @api_bp.route("/logs")
 def api_logs():
     tag      = (request.args.get("tag") or "").strip() or None
-    cal      = (request.args.get("cal") or "today").strip().lower()   # today|yesterday|week|month|year
+    cal      = (request.args.get("cal") or "all").strip().lower()
     limit    = int(request.args.get("limit","500") or 500)
     bucket_s = request.args.get("bucket_s","").strip()
     bucket_s = int(bucket_s) if bucket_s.isdigit() else None
 
     start_iso, end_iso = _bounds_for_calendar(cal)
 
-    if bucket_s and bucket_s > 0:
-        q = f"""
-          WITH rows AS (
-            SELECT substr(ts,1,19) AS s, tag, value, unit
-            FROM logs
-            WHERE ts >= ? AND ts <= ?
-            {{tag_clause}}
-          ),
-          agg AS (
-            SELECT s, tag, avg(value) AS value, MAX(unit) AS unit
-            FROM rows
-            GROUP BY tag, s
-          )
-          SELECT
-            s AS ts,
-            strftime('%Y-%m-%d %I:%M:%S %p', replace(s,'T',' ')) AS ts_fmt,
-            tag, value, unit
-          FROM agg
-          ORDER BY ts DESC
-          LIMIT ?
-        """
-    else:
-        q = f"""
-          SELECT
-            ts,
-            strftime('%Y-%m-%d %I:%M:%S %p', replace(ts,'T',' ')) AS ts_fmt,
-            tag, value, unit
-          FROM logs
-          WHERE ts >= ? AND ts <= ?
-          {{tag_clause}}
-          ORDER BY ts DESC
-          LIMIT ?
-        """
-
-    tag_clause = "" if not tag else "AND tag = ?"
-    q = q.format(tag_clause=tag_clause)
-    args = [start_iso, end_iso] + ([tag] if tag else []) + [limit]
-
-    with db() as con:
-        rows = [dict(r) for r in con.execute(q, args)]
+    rows = query_logs_between(
+        tag=tag, start_iso=start_iso, end_iso=end_iso,
+        limit=limit, bucket_s=bucket_s
+    )
     return jsonify(rows)
 
 @api_bp.route("/download.csv")
 def api_download_csv():
     tag      = (request.args.get("tag") or "").strip() or None
-    cal      = (request.args.get("cal") or "today").strip().lower()
+    cal      = (request.args.get("cal") or "all").strip().lower()
     limit    = int(request.args.get("limit","100000") or 100000)
     bucket_s = request.args.get("bucket_s","").strip()
     bucket_s = int(bucket_s) if bucket_s.isdigit() else None
 
     start_iso, end_iso = _bounds_for_calendar(cal)
 
-    rows = query_logs_between(tag=tag, start_iso=start_iso, end_iso=end_iso,
-                              limit=limit, bucket_s=bucket_s)
-
+    rows = query_logs_between(
+        tag=tag, start_iso=start_iso, end_iso=end_iso,
+        limit=limit, bucket_s=bucket_s
+    )
     csv_text = download_csv(rows)
     resp = make_response(csv_text)
     resp.headers["Content-Type"] = "text/csv"
