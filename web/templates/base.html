@@ -1,20 +1,27 @@
 <!doctype html>
-<html>
+<html lang="en">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <link href="/static/bootstrap.min.css" rel="stylesheet">
-  <title>{{ title or "PLC Logger" }}</title>
+  <link href="{{ url_for('static', filename='bootstrap.min.css') }}" rel="stylesheet">
+  <title>{% block title %}PLC Logger{% endblock %}</title>
 </head>
 <body class="p-3">
   <div class="container-fluid">
-    <h3 class="mb-3">PLC Logger</h3>
-    <div class="mb-3">
-      <a class="btn btn-outline-secondary btn-sm" href="/">Home</a>
-      <a class="btn btn-outline-secondary btn-sm" href="/status_page">Status</a>
-      <a class="btn btn-outline-secondary btn-sm" href="/setpoints">Setpoints</a>
+
+    <!-- Nav row -->
+    <div class="d-flex align-items-center mb-3">
+      <div class="btn-group" role="group" aria-label="Left nav">
+        <a class="btn btn-outline-secondary btn-sm" href="/">Home</a>
+        <a class="btn btn-outline-secondary btn-sm" href="/setpoints">Setpoints</a>
+      </div>
+      <div class="ms-auto">
+        <a class="btn btn-outline-primary btn-sm" href="/status_page">Status</a>
+      </div>
     </div>
+
     {% block content %}{% endblock %}
+
   </div>
 </body>
 </html>
