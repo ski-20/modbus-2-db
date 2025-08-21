@@ -42,9 +42,11 @@ def _pretty_tag_fallback(t: str) -> str:
     s = s.replace('Hours x10','Total Hours (x10)')
     return s.strip()
 
-def list_tags() -> List[str]:
+def list_tags() -> list[str]:
     with db() as con:
-        return [r["tag"] for r in con.execute("SELECT DISTINCT tag FROM logs ORDER BY tag")]
+        return [r["tag"] for r in con.execute(
+            "SELECT tag FROM tag_meta ORDER BY tag COLLATE NOCASE"
+        )]
 
 def fmt_ts_local_from_iso(iso_str: str) -> str:
     try:
