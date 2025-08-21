@@ -1,5 +1,4 @@
 # shared helpers: DB, labels, time, queries
-
 import sqlite3, io, csv
 from datetime import datetime, timedelta, timezone
 from typing import Optional, Dict, Any, List
@@ -17,22 +16,39 @@ try:
 except Exception:
     _ZONE = None  # will fall back to UTC
 
+
 def db():
     con = sqlite3.connect(DB, timeout=10)
     con.row_factory = sqlite3.Row
     con.execute("PRAGMA busy_timeout=2000")
     return con
 
+
 def tag_label_map() -> Dict[str, str]:
-    # read-only: if tag_meta missing/empty, return {}
+    """Return {tag: label} from tag_meta. Falls back to {} if table missing."""
     try:
         with db() as con:
             return {
-                r["name"]: (r["label"] or r["name"])
-                for r in con.execute("SELECT name, label FROM tag_meta")
+                r["tag"]: (r["label"] or r["tag"])
+                for r in con.execute("SELECT tag, label FROM tag_meta")
             }
     except Exception:
         return {}
+
+
+def list_tags_with_labels() -> List[Dict[str, str]]:
+    """Return rows with tag and a friendly label for dropdowns."""
+    try:
+        with db() as con:
+            rows = con.execute("""
+                SELECT tag, COALESCE(label, tag) AS label
+                FROM tag_meta
+                ORDER BY label COLLATE NOCASE
+            """).fetchall()
+            return [dict(r) for r in rows]
+    except Exception:
+        return []
+
 
 def _pretty_tag_fallback(t: str) -> str:
     s = t.replace('_',' ')
@@ -42,11 +58,14 @@ def _pretty_tag_fallback(t: str) -> str:
     s = s.replace('Hours x10','Total Hours (x10)')
     return s.strip()
 
+
 def list_tags() -> list[str]:
+    """If you still need just tag strings somewhere."""
     with db() as con:
         return [r["tag"] for r in con.execute(
             "SELECT tag FROM tag_meta ORDER BY tag COLLATE NOCASE"
         )]
+
 
 def fmt_ts_local_from_iso(iso_str: str) -> str:
     try:
@@ -61,6 +80,7 @@ def fmt_ts_local_from_iso(iso_str: str) -> str:
     except Exception:
         return iso_str
 
+
 def fmt_local_epoch(sec) -> Optional[str]:
     try:
         sec = float(sec)
@@ -71,8 +91,10 @@ def fmt_local_epoch(sec) -> Optional[str]:
     except Exception:
         return None
 
+
 def _since_iso(minutes: int) -> str:
     return (datetime.utcnow() - timedelta(minutes=minutes)).isoformat()
+
 
 def query_logs(tag: Optional[str], mins: int, limit: int, bucket_s: Optional[int]) -> list[dict]:
     since_ts = _since_iso(mins)
@@ -112,10 +134,10 @@ def query_logs(tag: Optional[str], mins: int, limit: int, bucket_s: Optional[int
 
     with db() as con:
         rows = [dict(r) for r in con.execute(q, args)]
-
     for r in rows:
         r["ts_fmt"] = fmt_ts_local_from_iso(r["ts"])
     return rows
+
 
 def download_csv(rows: list[dict]) -> str:
     buf = io.StringIO()
@@ -125,6 +147,7 @@ def download_csv(rows: list[dict]) -> str:
         w.writerow([r.get("ts"), r.get("tag"), r.get("value"), r.get("unit","")])
     return buf.getvalue()
 
+
 def read_state() -> Dict[str, Any]:
     try:
         with db() as con:
@@ -132,8 +155,8 @@ def read_state() -> Dict[str, Any]:
     except Exception:
         return {}
 
-# web/db.py
-# setpoints import
+
+# --- setpoints import (from tags.py) ---
 try:
     from tags import SETPOINTS as TAGS_SETPOINTS
 except Exception:
@@ -144,11 +167,10 @@ def fetch_setpoints():
     rows = []
     for sp in TAGS_SETPOINTS:
         rows.append({
-            "name":  sp["name"],
+            "name": sp["name"],
             "label": sp.get("label", sp["name"]),
-            "unit":  sp.get("unit", ""),
-            "mw":    sp["mw"],
+            "unit": sp.get("unit", ""),
+            "mw": sp["mw"],
             "dtype": sp.get("type", sp.get("dtype", "FLOAT32")),
         })
     return rows
-

@@ -4,8 +4,13 @@
   <div class="col-md-4">
     <label class="form-label">Tag</label>
     <select class="form-select" name="tag">
-      {{ options|safe }}
-    </select>
+    <option value="">(all)</option>
+    {% for r in tags %}
+      <option value="{{ r.tag }}" {% if r.tag == cur_tag %}selected{% endif %}>
+        {{ r.label }}
+      </option>
+    {% endfor %}
+  </select>
   </div>
 
   <div class="col-md-3">
