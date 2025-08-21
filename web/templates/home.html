@@ -69,7 +69,7 @@ async function loadTable() {
   tbody.innerHTML = rows.map(row => (
     `<tr>
       <td>${row.ts_fmt || row.ts}</td>
-      <td>${row.tag}</td>
+      <td>${row.label || row.tag}</td>
       <td>${row.value}</td>
       <td>${row.unit || ''}</td>
     </tr>`

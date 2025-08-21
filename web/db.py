@@ -44,22 +44,12 @@ def list_tags_with_labels():
         """).fetchall()
         return [dict(r) for r in rows]
 
-def _pretty_tag_fallback(t: str) -> str:
-    s = t.replace('_',' ')
-    s = s.replace('P1 ', 'Pump 1 ').replace('P2 ', 'Pump 2 ')
-    s = s.replace('DCBus','DC Bus').replace('DrvStatusWord','Drive Status Word')
-    s = s.replace('OutV','Output Voltage').replace('TorqueRaw','Torque (raw)')
-    s = s.replace('Hours x10','Total Hours (x10)')
-    return s.strip()
-
-
 def list_tags() -> list[str]:
     """If you still need just tag strings somewhere."""
     with db() as con:
         return [r["tag"] for r in con.execute(
             "SELECT tag FROM tag_meta ORDER BY tag COLLATE NOCASE"
         )]
-
 
 def fmt_ts_local_from_iso(iso_str: str) -> str:
     try:
@@ -119,19 +109,15 @@ def query_logs(tag=None, date_range="all", limit=500, bucket_s=0):
     
 def query_logs_between(tag: Optional[str], start_iso: str, end_iso: str,
                        limit: int, bucket_s: Optional[int]) -> list[dict]:
-    """
-    Query logs between [start_iso, end_iso], optional tag filter, with optional bucketing.
-    Returns rows with ts, tag, value, unit, and ts_fmt (localized human-readable).
-    """
-    tag_clause = "" if not tag else "AND tag = ?"
+    tag_clause = "" if not tag else "AND l.tag = ?"
     args = [start_iso, end_iso] + ([tag] if tag else []) + [limit]
 
     if bucket_s and bucket_s > 0:
         q = f"""
         WITH rows AS (
-          SELECT ts, tag, value, unit
-          FROM logs
-          WHERE ts >= ? AND ts <= ?
+          SELECT l.ts, l.tag, l.value, l.unit
+          FROM logs l
+          WHERE l.ts >= ? AND l.ts <= ?
           {tag_clause}
         ),
         buck AS (
@@ -144,27 +130,39 @@ def query_logs_between(tag: Optional[str], start_iso: str, end_iso: str,
           FROM rows
           GROUP BY tag, bucket
         )
-        SELECT ts, tag, value, unit
-        FROM buck
+        SELECT b.ts AS ts,
+               b.tag AS tag,
+               COALESCE(m.label, b.tag) AS label,
+               b.value AS value,
+               b.unit  AS unit
+        FROM buck b
+        LEFT JOIN tag_meta m ON m.tag = b.tag
         ORDER BY ts DESC
         LIMIT ?
         """
     else:
         q = f"""
-        SELECT ts, tag, value, unit
-        FROM logs
-        WHERE ts >= ? AND ts <= ?
+        SELECT l.ts AS ts,
+               l.tag AS tag,
+               COALESCE(m.label, l.tag) AS label,
+               l.value AS value,
+               l.unit  AS unit
+        FROM logs l
+        LEFT JOIN tag_meta m ON m.tag = l.tag
+        WHERE l.ts >= ? AND l.ts <= ?
         {tag_clause}
-        ORDER BY ts DESC
+        ORDER BY l.ts DESC
         LIMIT ?
         """
 
     with db() as con:
         rows = [dict(r) for r in con.execute(q, args)]
 
-    # Attach nice formatted timestamp
     for r in rows:
-        r["ts_fmt"] = fmt_local_epoch(r["ts"]) if "fmt_local_epoch" in globals() else r["ts"]
+        r["ts_fmt"] = fmt_ts_local_from_iso(r["ts"])
+        # Force floats to 1 decimal
+        if isinstance(r["value"], float):
+            r["value"] = round(r["value"], 1)
 
     return rows
 
