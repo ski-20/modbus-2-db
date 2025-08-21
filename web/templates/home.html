@@ -64,7 +64,6 @@
 {% endblock %}
 
 {% block scripts %}
-
 <script>
 function qs(id){ return document.getElementById(id); }
 
@@ -81,35 +80,55 @@ function buildParams(){
   return p;
 }
 
+function toOneDecimal(val) {
+  // Handle numbers and numeric strings safely
+  if (val === null || val === undefined) return '';
+  const n = (typeof val === 'number') ? val : Number(val);
+  if (Number.isFinite(n)) return n.toFixed(1);
+  return String(val);
+}
+
 async function loadTable() {
   const p = buildParams();
-  // CSV link
+  // Set CSV link
   qs('dl').href = '/api/download.csv?' + p.toString();
 
-  let r;
+  let resp;
   try {
-    r = await fetch('/api/logs?' + p.toString(), { cache: 'no-store' });
+    resp = await fetch('/api/logs?' + p.toString(), { cache: 'no-store' });
   } catch (e) {
     console.error('Fetch error:', e);
     alert('Network error calling /api/logs. See console.');
     return;
   }
 
-  if (!r.ok) {
-    const txt = await r.text();
-    console.error('API error:', r.status, txt);
-    alert('API error ' + r.status + ': ' + txt);
+  if (!resp.ok) {
+    const txt = await resp.text();
+    console.error('API error:', resp.status, txt);
+    alert('API error ' + resp.status + ': ' + txt);
     return;
   }
 
-  const rows = await r.json();
-  console.log('rows:', rows);
+  let payload;
+  try {
+    payload = await resp.json();
+  } catch (e) {
+    console.error('JSON parse error:', e);
+    alert('Could not parse /api/logs JSON.');
+    return;
+  }
 
+  // Robustly extract rows regardless of shape
+  const rows = Array.isArray(payload) ? payload
+              : (Array.isArray(payload.rows) ? payload.rows
+              : (Array.isArray(payload.data) ? payload.data : []));
+
+  // Render table
   const tbody = document.querySelector('#tbl tbody');
   tbody.innerHTML = rows.map(row => {
     const ts    = row.ts_fmt || row.ts || '';
     const label = row.label  || row.tag || '';
-    const val   = (typeof row.value === 'number') ? row.value.toFixed(1) : row.value;
+    const val   = toOneDecimal(row.value);
     const unit  = row.unit || '';
     return `<tr>
       <td>${ts}</td>
@@ -128,5 +147,4 @@ document.getElementById('loadBtn').addEventListener('click', function(e){
 // first paint
 loadTable();
 </script>
-
 {% endblock %}
