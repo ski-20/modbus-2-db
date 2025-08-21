@@ -35,20 +35,12 @@ def tag_label_map() -> Dict[str, str]:
     except Exception:
         return {}
 
-
-def list_tags_with_labels() -> List[Dict[str, str]]:
-    """Return rows with tag and a friendly label for dropdowns."""
-    try:
-        with db() as con:
-            rows = con.execute("""
-                SELECT tag, COALESCE(label, tag) AS label
-                FROM tag_meta
-                ORDER BY label COLLATE NOCASE
-            """).fetchall()
-            return [dict(r) for r in rows]
-    except Exception:
-        return []
-
+def list_tags_with_labels():
+    with db() as con:
+        return [
+            {"tag": r["name"], "label": r["label"]}
+            for r in con.execute("SELECT name, label FROM tag_meta ORDER BY name")
+        ]
 
 def _pretty_tag_fallback(t: str) -> str:
     s = t.replace('_',' ')
