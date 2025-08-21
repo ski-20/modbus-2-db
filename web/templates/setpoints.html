@@ -24,15 +24,15 @@
 </form>
 
 <table class="table table-sm table-striped">
-  <thead><tr><th>Name</th><th>MW</th><th>Type</th><th>Current</th></tr></thead>
+  <thead><tr><th>Tag</th><th>Value</th><th>Unit</th><th>Type</th><th>%MWx</th></tr></thead>
   <tbody>
     {% for sp in sps %}
       <tr>
         <td>{{ sp.label or labels.get(sp.name, sp.name) }}</td>
-        <td>%MW{{ sp.mw }}</td>
-        <!-- <td>{{ sp.dtype }}</td> -->
         <td>{{ values.get(sp.name) }}</td>
         <td>{{ sp['unit'] }}</td>
+        <td>{{ sp.dtype }}</td>
+        <td>%MW{{ sp.mw }}</td>
       </tr>
     {% endfor %}
   </tbody>
