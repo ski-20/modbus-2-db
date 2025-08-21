@@ -21,12 +21,13 @@
       <option value="week">This Week</option>
       <option value="month">This Month</option>
       <option value="year">This Year</option>
+      <option value="all">(all)</option>
     </select>
   </div>
 
   <div class="col-md-2">
     <label class="form-label">Limit</label>
-    <input class="form-control" name="limit" value="{{ cur_limit }}">
+    <input type="number" class="form-control" name="limit" id="limit" value="{{ request.args.get('limit', 500) }}">
   </div>
 
   <div class="col-md-2">

@@ -59,6 +59,10 @@ def _bounds_for_calendar(preset: str) -> tuple[str, str]:
         # Jan 1 of this year -> now
         start_local = datetime(today.year, 1, 1, 0, 0, 0)
         end_local   = now_local.replace(microsecond=0)
+    elif preset == "all":
+        # earliest practical bound; your ts are UTC ISO (naive) so keep it naive too
+        start_local = datetime(1970, 1, 1, 0, 0, 0)
+        end_local   = now_local.replace(microsecond=0)
     else:
         # default to "today" if not recognized
         start_local = datetime(today.year, today.month, today.day, 0, 0, 0)
