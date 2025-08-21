@@ -53,10 +53,14 @@ async function loadTable() {
   const r = await fetch('/api/logs?' + p.toString());
   const rows = await r.json();
   tbody.innerHTML = rows.map(function(row) {
+    const val = (typeof row.value === "number")
+      ? row.value.toFixed(1)
+      : row.value; // fallback if not numeric
+
     return '<tr>'
       + '<td>' + (row.ts_fmt || row.ts) + '</td>'
       + '<td>' + (row.tag_label || row.tag) + '</td>'
-      + '<td>' + row.value + '</td>'
+      + '<td>' + val + '</td>'
       + '<td>' + (row.unit || '') + '</td>'
       + '</tr>';
   }).join('');
