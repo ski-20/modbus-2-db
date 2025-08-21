@@ -85,7 +85,6 @@ def fmt_local_epoch(sec) -> Optional[str]:
     except Exception:
         return None
 
-
 def _since_iso(minutes: int) -> str:
     return (datetime.utcnow() - timedelta(minutes=minutes)).isoformat()
 
@@ -117,6 +116,53 @@ def query_logs(tag=None, date_range="all", limit=500, bucket_s=0):
         rows = con.execute(sql, params).fetchall()
 
         return rows
+    
+def query_logs_between(tag: Optional[str], start_iso: str, end_iso: str,
+                       limit: int, bucket_s: Optional[int]) -> list[dict]:
+    """
+    Query logs between [start_iso, end_iso], optional tag filter, with optional bucketing.
+    Returns rows with ts, tag, value, unit, and ts_fmt (localized).
+    """
+    if bucket_s and bucket_s > 0:
+        q = """
+        WITH rows AS (
+          SELECT substr(ts,1,19) AS s, tag, value, unit
+          FROM logs
+          WHERE ts >= ? AND ts <= ?
+          {tag_clause}
+        ),
+        agg AS (
+          SELECT s, tag, avg(value) AS value, MAX(unit) AS unit
+          FROM rows
+          GROUP BY tag, s
+        )
+        SELECT s AS ts, tag, value, unit
+        FROM agg
+        ORDER BY ts DESC
+        LIMIT ?
+        """
+        tag_clause = "" if not tag else "AND tag = ?"
+        args = [start_iso, end_iso] + ([tag] if tag else []) + [limit]
+        q = q.format(tag_clause=tag_clause)
+    else:
+        q = """
+        SELECT ts, tag, value, unit
+        FROM logs
+        WHERE ts >= ? AND ts <= ?
+        {tag_clause}
+        ORDER BY ts DESC
+        LIMIT ?
+        """
+        tag_clause = "" if not tag else "AND tag = ?"
+        args = [start_iso, end_iso] + ([tag] if tag else []) + [limit]
+        q = q.format(tag_clause=tag_clause)
+
+    with db() as con:
+        rows = [dict(r) for r in con.execute(q, args)]
+    # optional: add localized formatted time if you use it elsewhere
+    for r in rows:
+        r["ts_fmt"] = fmt_ts_local_from_iso(r["ts"]) if "fmt_ts_local_from_iso" in globals() else r["ts"]
+    return rows
 
 def download_csv(rows: list[dict]) -> str:
     buf = io.StringIO()
