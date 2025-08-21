@@ -1,7 +1,7 @@
 # API routes: /api/logs, /api/download.csv
 
 from flask import Blueprint, request, jsonify, make_response
-from .db import db, query_logs, download_csv, tag_label_map, _pretty_tag_fallback
+from .db import db, download_csv, tag_label_map, fmt_local_epoch, query_logs_between
 
 from datetime import datetime, timedelta, timezone, date
 
@@ -134,7 +134,9 @@ def api_download_csv():
 
     start_iso, end_iso = _bounds_for_calendar(cal)
 
-    rows = query_logs(tag, date_range=date_range, limit=limit, bucket_s=bucket_s)
+    rows = query_logs_between(tag=tag, start_iso=start_iso, end_iso=end_iso,
+                              limit=limit, bucket_s=bucket_s)
+
     csv_text = download_csv(rows)
     resp = make_response(csv_text)
     resp.headers["Content-Type"] = "text/csv"

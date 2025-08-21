@@ -89,49 +89,34 @@ def fmt_local_epoch(sec) -> Optional[str]:
 def _since_iso(minutes: int) -> str:
     return (datetime.utcnow() - timedelta(minutes=minutes)).isoformat()
 
-
-def query_logs(tag: Optional[str], mins: int, limit: int, bucket_s: Optional[int]) -> list[dict]:
-    since_ts = _since_iso(mins)
-    if bucket_s and bucket_s > 0:
-        q = """
-        WITH rows AS (
-          SELECT substr(ts,1,19) AS s, tag, value, unit
-          FROM logs
-          WHERE ts >= ?
-          {tag_clause}
-        ),
-        agg AS (
-          SELECT s, tag, avg(value) AS value, MAX(unit) AS unit
-          FROM rows
-          GROUP BY tag, s
-        )
-        SELECT s AS ts, tag, value, unit
-        FROM agg
-        ORDER BY ts DESC
-        LIMIT ?
-        """
-        tag_clause = "" if not tag else "AND tag = ?"
-        args = [since_ts] + ([tag] if tag else []) + [limit]
-        q = q.format(tag_clause=tag_clause)
-    else:
-        q = """
-        SELECT ts, tag, value, unit
-        FROM logs
-        WHERE ts >= ?
-        {tag_clause}
-        ORDER BY ts DESC
-        LIMIT ?
-        """
-        tag_clause = "" if not tag else "AND tag = ?"
-        args = [since_ts] + ([tag] if tag else []) + [limit]
-        q = q.format(tag_clause=tag_clause)
-
+def query_logs(tag=None, date_range="all", limit=500, bucket_s=0):
     with db() as con:
-        rows = [dict(r) for r in con.execute(q, args)]
-    for r in rows:
-        r["ts_fmt"] = fmt_ts_local_from_iso(r["ts"])
-    return rows
+        sql = "SELECT ts, tag, value FROM logs WHERE 1=1"
+        params = []
 
+        if tag and tag != "":
+            sql += " AND tag=?"
+            params.append(tag)
+
+        # Handle date range
+        if date_range != "all":
+            if date_range == "today":
+                sql += " AND date(ts) = date('now', 'localtime')"
+            elif date_range == "yesterday":
+                sql += " AND date(ts) = date('now', '-1 day', 'localtime')"
+            elif date_range == "week":
+                sql += " AND ts >= date('now', '-7 days', 'localtime')"
+            elif date_range == "month":
+                sql += " AND ts >= date('now', '-1 month', 'localtime')"
+            elif date_range == "year":
+                sql += " AND ts >= date('now', '-1 year', 'localtime')"
+
+        sql += " ORDER BY ts DESC LIMIT ?"
+        params.append(limit)
+
+        rows = con.execute(sql, params).fetchall()
+
+        return rows
 
 def download_csv(rows: list[dict]) -> str:
     buf = io.StringIO()
