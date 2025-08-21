@@ -64,14 +64,15 @@
 {% endblock %}
 
 {% block scripts %}
+
 <script>
 function qs(id){ return document.getElementById(id); }
 
 function buildParams(){
   const p = new URLSearchParams();
-  const tag = qs('tag').value.trim();
-  const cal = qs('cal').value || 'all';
-  const limit = qs('limit').value || '500';
+  const tag    = qs('tag').value.trim();
+  const cal    = qs('cal').value || 'all';
+  const limit  = qs('limit').value || '500';
   const bucket = qs('bucket_s').value || '';
   if (tag) p.set('tag', tag);
   p.set('cal', cal);
@@ -85,17 +86,31 @@ async function loadTable() {
   // CSV link
   qs('dl').href = '/api/download.csv?' + p.toString();
 
-  const r = await fetch('/api/logs?' + p.toString());
+  let r;
+  try {
+    r = await fetch('/api/logs?' + p.toString(), { cache: 'no-store' });
+  } catch (e) {
+    console.error('Fetch error:', e);
+    alert('Network error calling /api/logs. See console.');
+    return;
+  }
+
+  if (!r.ok) {
+    const txt = await r.text();
+    console.error('API error:', r.status, txt);
+    alert('API error ' + r.status + ': ' + txt);
+    return;
+  }
+
   const rows = await r.json();
+  console.log('rows:', rows);
 
   const tbody = document.querySelector('#tbl tbody');
   tbody.innerHTML = rows.map(row => {
-    const ts = row.ts_fmt || row.ts;                // pretty local timestamp
-    const label = row.label || row.tag;             // friendly label
-    const val = (typeof row.value === 'number')
-                ? row.value.toFixed(1)              // 1 decimal on web only
-                : row.value;
-    const unit = row.unit || '';
+    const ts    = row.ts_fmt || row.ts || '';
+    const label = row.label  || row.tag || '';
+    const val   = (typeof row.value === 'number') ? row.value.toFixed(1) : row.value;
+    const unit  = row.unit || '';
     return `<tr>
       <td>${ts}</td>
       <td>${label}</td>
@@ -105,12 +120,13 @@ async function loadTable() {
   }).join('');
 }
 
-qs('loadBtn').addEventListener('click', (e) => {
+document.getElementById('loadBtn').addEventListener('click', function(e){
   e.preventDefault();
   loadTable();
 });
 
-// auto-load on first paint
+// first paint
 loadTable();
 </script>
+
 {% endblock %}
