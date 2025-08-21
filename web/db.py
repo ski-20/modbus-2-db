@@ -121,31 +121,36 @@ def query_logs_between(tag: Optional[str], start_iso: str, end_iso: str,
                        limit: int, bucket_s: Optional[int]) -> list[dict]:
     """
     Query logs between [start_iso, end_iso], optional tag filter, with optional bucketing.
-    Returns rows with ts, tag, value, unit, and ts_fmt (localized).
+    Returns rows with ts, tag, value, unit, and ts_fmt (localized human-readable).
     """
+    tag_clause = "" if not tag else "AND tag = ?"
+    args = [start_iso, end_iso] + ([tag] if tag else []) + [limit]
+
     if bucket_s and bucket_s > 0:
-        q = """
+        q = f"""
         WITH rows AS (
-          SELECT substr(ts,1,19) AS s, tag, value, unit
+          SELECT ts, tag, value, unit
           FROM logs
           WHERE ts >= ? AND ts <= ?
           {tag_clause}
         ),
-        agg AS (
-          SELECT s, tag, avg(value) AS value, MAX(unit) AS unit
+        buck AS (
+          SELECT
+            strftime('%s', ts) / {bucket_s} AS bucket,
+            tag,
+            AVG(value) AS value,
+            MAX(unit) AS unit,
+            MIN(ts) AS ts
           FROM rows
-          GROUP BY tag, s
+          GROUP BY tag, bucket
         )
-        SELECT s AS ts, tag, value, unit
-        FROM agg
+        SELECT ts, tag, value, unit
+        FROM buck
         ORDER BY ts DESC
         LIMIT ?
         """
-        tag_clause = "" if not tag else "AND tag = ?"
-        args = [start_iso, end_iso] + ([tag] if tag else []) + [limit]
-        q = q.format(tag_clause=tag_clause)
     else:
-        q = """
+        q = f"""
         SELECT ts, tag, value, unit
         FROM logs
         WHERE ts >= ? AND ts <= ?
@@ -153,15 +158,14 @@ def query_logs_between(tag: Optional[str], start_iso: str, end_iso: str,
         ORDER BY ts DESC
         LIMIT ?
         """
-        tag_clause = "" if not tag else "AND tag = ?"
-        args = [start_iso, end_iso] + ([tag] if tag else []) + [limit]
-        q = q.format(tag_clause=tag_clause)
 
     with db() as con:
         rows = [dict(r) for r in con.execute(q, args)]
-    # optional: add localized formatted time if you use it elsewhere
+
+    # Attach nice formatted timestamp
     for r in rows:
-        r["ts_fmt"] = fmt_ts_local_from_iso(r["ts"]) if "fmt_ts_local_from_iso" in globals() else r["ts"]
+        r["ts_fmt"] = fmt_local_epoch(r["ts"]) if "fmt_local_epoch" in globals() else r["ts"]
+
     return rows
 
 def download_csv(rows: list[dict]) -> str:
