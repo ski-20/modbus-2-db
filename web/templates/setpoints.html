@@ -29,7 +29,19 @@
     {% for sp in sps %}
       <tr>
         <td>{{ sp.label or labels.get(sp.name, sp.name) }}</td>
-        <td>{{ values.get(sp.name) }}</td>
+        <td>
+          {% set v = values.get(sp.name) %}
+          {% set dt = (sp.get('dtype') or sp.get('type') or '')|upper %}
+          {% if v is number %}
+            {% if dt in ['FLOAT32','REAL','DOUBLE','FLOAT'] %}
+              {{ '%.1f'|format(v) }}
+            {% else %}
+              {{ v|int }}
+            {% endif %}
+          {% else %}
+            {{ v }}
+          {% endif %}
+        </td>
         <td>{{ sp['unit'] }}</td>
         <td>{{ sp.dtype }}</td>
         <td>%MW{{ sp.mw }}</td>
