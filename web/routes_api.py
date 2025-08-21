@@ -134,7 +134,7 @@ def api_download_csv():
 
     start_iso, end_iso = _bounds_for_calendar(cal)
 
-    rows = query_logs(tag, mins, limit, bucket_s)
+    rows = query_logs(tag, date_range=date_range, limit=limit, bucket_s=bucket_s)
     csv_text = download_csv(rows)
     resp = make_response(csv_text)
     resp.headers["Content-Type"] = "text/csv"
