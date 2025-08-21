@@ -1,30 +1,35 @@
 {% extends "base.html" %}
 {% block content %}
 <form id="f" class="row g-2 mb-3">
-  <div class="col-sm-4">
+  <div class="col-md-4">
     <label class="form-label">Tag</label>
     <select class="form-select" name="tag">
-      <option value="" {% if not selections.tag %}selected{% endif %}>(all)</option>
-      {% for t in tags %}
-        <option value="{{ t }}" {% if selections.tag==t %}selected{% endif %}>
-          {{ labels.get(t, t)|replace('_',' ') }}
-        </option>
-      {% endfor %}
+      {{ options|safe }}
     </select>
   </div>
-  <div class="col-sm-2">
-    <label class="form-label">Last minutes</label>
-    <input class="form-control" name="mins" value="{{ selections.mins }}">
+
+  <div class="col-md-3">
+    <label class="form-label">Calendar Range</label>
+    <select class="form-select" name="cal" id="cal">
+      <option value="today" selected>Today</option>
+      <option value="yesterday">Yesterday</option>
+      <option value="week">This Week</option>
+      <option value="month">This Month</option>
+      <option value="year">This Year</option>
+    </select>
   </div>
-  <div class="col-sm-2">
+
+  <div class="col-md-2">
     <label class="form-label">Limit</label>
-    <input class="form-control" name="limit" value="{{ selections.limit }}">
+    <input class="form-control" name="limit" value="{{ cur_limit }}">
   </div>
-  <div class="col-sm-2">
+
+  <div class="col-md-2">
     <label class="form-label">Bucket (sec, optional)</label>
-    <input class="form-control" name="bucket_s" value="{{ selections.bucket_s }}">
+    <input class="form-control" name="bucket_s" value="{{ cur_bucket }}">
   </div>
-  <div class="col-sm-2 align-self-end">
+
+  <div class="col-md-1 align-self-end">
     <button class="btn btn-primary w-100" type="submit">Load</button>
   </div>
 </form>
@@ -49,28 +54,29 @@ const dl = document.getElementById('dl');
 
 async function loadTable() {
   const p = new URLSearchParams(new FormData(f));
+  // Clean legacy params if they still exist
+  p.delete('mins'); p.delete('range'); p.delete('start'); p.delete('end');
+
   dl.href = '/api/download.csv?' + p.toString();
   const r = await fetch('/api/logs?' + p.toString());
   const rows = await r.json();
-  tbody.innerHTML = rows.map(function(row) {
-    const val = (typeof row.value === "number")
-      ? row.value.toFixed(1)
-      : row.value; // fallback if not numeric
-
-    return '<tr>'
-      + '<td>' + (row.ts_fmt || row.ts) + '</td>'
-      + '<td>' + (row.tag_label || row.tag) + '</td>'
-      + '<td>' + val + '</td>'
-      + '<td>' + (row.unit || '') + '</td>'
-      + '</tr>';
-  }).join('');
+  tbody.innerHTML = rows.map(row => (
+    `<tr>
+      <td>${row.ts_fmt || row.ts}</td>
+      <td>${row.tag}</td>
+      <td>${row.value}</td>
+      <td>${row.unit || ''}</td>
+    </tr>`
+  )).join('');
 }
 
-f.addEventListener('submit', function(e) {
+f.addEventListener('submit', (e) => {
   e.preventDefault();
   loadTable();
 });
 
+// auto-load first paint
 loadTable();
 </script>
+
 {% endblock %}
