@@ -68,7 +68,7 @@ def _bounds_for_calendar(preset: str) -> tuple[str, str]:
 
 api_bp = Blueprint("api", __name__)
 
-@app.route("/logs")
+@api_bp.route("/logs")
 def api_logs():
     tag      = (request.args.get("tag") or "").strip() or None
     cal      = (request.args.get("cal") or "today").strip().lower()   # today|yesterday|week|month|year
@@ -129,7 +129,7 @@ def api_download_csv():
     bucket_s = int(bucket_s) if bucket_s.isdigit() else None
 
     start_iso, end_iso = _bounds_for_calendar(cal)
-    
+
     rows = query_logs(tag, mins, limit, bucket_s)
     csv_text = download_csv(rows)
     resp = make_response(csv_text)
