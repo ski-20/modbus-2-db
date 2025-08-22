@@ -122,7 +122,7 @@ def enforce_quota_now(cfg: RetentionConfig) -> dict:
             con.commit()
         return n
 
-    for tag in PRIMARY_PURGE_TAGS:
+    for tag in primary:
         while size > max_bytes:
             deleted = delete_oldest_for_tag(tag, cfg.delete_batch)
             if deleted == 0:
