@@ -10,7 +10,7 @@ try:
 except Exception:
     DB = "/home/ele/plc_logger/plc.db"
     PLC_IP, PLC_PORT = "10.0.0.1", 502
-    WORD_ORDER = "HL"   # "HL" = hi-word first in %MWn, %MWn+1; use "LH" if low-word first
+    WORD_ORDER = "LH"   # "HL" = hi-word first in %MWn, %MWn+1; use "LH" if low-word first
 
 # default absolute deadband for on change tag logging
 DEFAULT_DB_ABS = 0.05
