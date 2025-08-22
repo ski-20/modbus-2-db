@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 import time, struct, sqlite3, threading, random
-from datetime import datetime
+from datetime import datetime, timezone
 import logging
 
 # ------------------ CONFIG ------------------
@@ -102,6 +102,48 @@ def write_rows(rows):
     cur.executemany("INSERT INTO logs (ts, tag, value, unit) VALUES (?,?,?,?)", rows)
     con.commit(); con.close()
 
+def _iso_to_epoch_utc(ts_text: str) -> float:
+    """
+    Convert your stored ISO UTC string to epoch seconds.
+    Assumes your code stores UTC via datetime.utcnow().isoformat().
+    """
+    try:
+        dt = datetime.fromisoformat(ts_text)
+    except Exception:
+        return 0.0
+    # Treat naive dt as UTC (you use datetime.utcnow())
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    return dt.timestamp()
+
+def hydrate_baseline_from_db():
+    """
+    Seed last_value and last_logged from the latest DB row per tag.
+    Prevents 'first scan after restart' logging for on_change/conditional.
+    """
+    con = sqlite3.connect(DB, timeout=30)
+    cur = con.cursor()
+    try:
+        cur.execute("""
+            SELECT l.tag, l.value, l.ts
+            FROM logs AS l
+            JOIN (
+              SELECT tag, MAX(ts) AS ts
+              FROM logs
+              GROUP BY tag
+            ) x ON x.tag = l.tag AND x.ts = l.ts
+        """)
+        rows = cur.fetchall()
+    finally:
+        cur.close(); con.close()
+
+    for tag, value, ts_text in rows:
+        try:
+            last_value[str(tag)]  = float(value) if value is not None else None
+        except Exception:
+            last_value[str(tag)]  = None
+        last_logged[str(tag)] = _iso_to_epoch_utc(ts_text) or 0.0
+
 # ------------------ Modbus decode helpers ------------------
 def to_int16(w):   return w - 65536 if w >= 32768 else w
 def to_uint16(w):  return w
@@ -162,8 +204,9 @@ def mark_logged(name, now_s):
     last_logged[name] = float(now_s)
 
 def changed_enough(prev, cur, deadband_abs=None, deadband_pct=None):
+    # If we don't have any baseline yet, do NOT treat the first sample as a change.
     if prev is None:
-        return True
+        return False
     if deadband_abs is not None and abs(cur - prev) > float(deadband_abs):
         return True
     if deadband_pct is not None:
@@ -194,6 +237,17 @@ def eval_condition(cond, values_by_name):
 def main():
     ensure_schema()
     upsert_tag_meta_from_tags()
+
+    # Hydrate baselines so on_change/conditional don't fire immediately after restart
+    hydrate_baseline_from_db()
+
+    # For any tags with no DB history, seed their last_logged to "now"
+    # so conditional mode won't burst-log on first cycle.
+    seed_now = time.time()
+    for t in TAGS:
+        name = t["name"]
+        if name not in last_logged:
+            last_logged[name] = float(seed_now)
 
     # Precompute minimal contiguous %MW window
     def width(t):
