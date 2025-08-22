@@ -8,6 +8,14 @@ from .db import (
 )
 from .modbus import mb_client, float_to_words, read_setpoint_block_dyn
 
+#strage status imports
+from storage_status import get_storage_status
+try:
+    from config import DB, RETENTION
+except Exception:
+    DB = "/home/ele/plc_logger/plc.db"
+    RETENTION = {}
+
 ui_bp = Blueprint("ui", __name__)
 
 @ui_bp.route("/")
@@ -31,7 +39,6 @@ def home():
         selections=selections
     )
 
-
 @ui_bp.route("/status_page")
 def status_page():
     s = read_state()
@@ -40,7 +47,9 @@ def status_page():
         s["last_read_epoch_local"] = fmt_local_epoch(s.get("last_read_epoch"))
     if s.get("last_flush_epoch") is not None:
         s["last_flush_epoch_local"] = fmt_local_epoch(s.get("last_flush_epoch"))
-    return render_template("status.html", title="Status", s=s)
+
+    storage = get_storage_status(DB, RETENTION.get("max_db_mb", 512))
+    return render_template("status.html", title="Status", s=s, storage=storage)
 
 @ui_bp.route("/setpoints", methods=["GET", "POST"])
 def setpoints():

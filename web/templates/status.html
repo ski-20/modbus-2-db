@@ -16,13 +16,15 @@
 <hr>
 
 <h5>Storage</h5>
-<ul class="mb-2">
-  <li>Used / Cap (MB): <strong>{{ storage.total_mb }}/{{ storage.cap_mb }}</strong> ({{ storage.pct_of_cap }}%)</li>
-  <li>DB / WAL / SHM (MB): {{ storage.db_mb }} / {{ storage.wal_mb }} / {{ storage.shm_mb }}</li>
-  <li>Auto-vacuum / Journal: {{ storage.auto_vacuum_label }} / {{ storage.journal_mode }}</li>
-  <li>Pages / Free pages: {{ storage.page_count }} / {{ storage.freelist_count }}</li>
-  <li>Rows (logs): {{ storage.row_count }}</li>
-  <li>Oldest / Newest: {{ storage.min_ts or '—' }} / {{ storage.max_ts or '—' }}</li>
-</ul>
+<table class="table table-sm table-striped">
+  <tbody>
+    <tr><td>Used / Cap (MB)</td><td>{{ storage.total_mb }}/{{ storage.cap_mb }} ({{ storage.pct_of_cap }}%)</td></tr>
+    <tr><td>DB / WAL / SHM (MB)</td><td>{{ storage.db_mb }} / {{ storage.wal_mb }} / {{ storage.shm_mb }}</td></tr>
+    <tr><td>Auto-vacuum / Journal</td><td>{{ storage.auto_vacuum_label }} / {{ storage.journal_mode }}</td></tr>
+    <tr><td>Pages / Free pages</td><td>{{ storage.page_count }} / {{ storage.freelist_count }}</td></tr>
+    <tr><td>Rows (logs)</td><td>{{ storage.row_count }}</td></tr>
+    <tr><td>Oldest / Newest</td><td>{{ storage.min_ts or '—' }} / {{ storage.max_ts or '—' }}</td></tr>
+  </tbody>
+</table>
 {% endif %}
 {% endblock %}
