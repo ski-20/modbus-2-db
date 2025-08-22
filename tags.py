@@ -12,7 +12,7 @@ SYSTEM_TAGS = [
 
     {"name": "SYS_OutDataWord", "label": "System Output Data Word", "mw": 442,
      "dtype": "INT16", "unit": "",
-     "mode": "interval", "interval_sec": 10},
+     "mode":"on_change"},
 ]
 
 # --- Pump tags generator ---

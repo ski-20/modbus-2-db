@@ -6,13 +6,27 @@ import logging
 # ------------------ CONFIG ------------------
 # Prefer config.py if you have it
 try:
-    from config import DB, PLC_IP, PLC_PORT, WORD_ORDER
+    from config import DB, PLC_IP, PLC_PORT, WORD_ORDER, RETENTION
 except Exception:
     DB = "/home/ele/plc_logger/plc.db"
     PLC_IP, PLC_PORT = "10.0.0.1", 502
     WORD_ORDER = "LH"   # "HL" = hi-word first in %MWn, %MWn+1; use "LH" if low-word first
+    RETENTION = {}  # fall back to builtin defaults
 
-# default absolute deadband for on change tag logging
+# retention/cleanup
+from retention import RetentionConfig, enforce_quota_periodic
+
+ret_cfg = RetentionConfig(
+    db_path=DB,
+    max_db_mb=RETENTION.get("max_db_mb", 512),
+    raw_keep_days=RETENTION.get("raw_keep_days", 14),
+    delete_batch=RETENTION.get("delete_batch", 10_000),
+    enforce_every_s=RETENTION.get("enforce_every_s", 300),
+    incremental_vacuum_pages=RETENTION.get("incremental_vacuum_pages", 2000),
+    primary_purge_tags=RETENTION.get("primary_purge_tags", ["SYS_WetWellLevel"]),
+)
+
+# default absolute deadband for on change tag logging, should never really need to change
 DEFAULT_DB_ABS = 0.05
 
 # Tags + cadences come from tags.py
@@ -341,6 +355,19 @@ def main():
                 ])
                 pending.clear()
                 last_flush = time.time()
+
+                # keep DB under cap (self-throttled)
+                try:
+                    stats = enforce_quota_periodic(ret_cfg)
+                    if not stats.get("skipped"):
+                        log.info(
+                            "Retention: deleted=%s size %.1fMB→%.1fMB",
+                            stats["deleted"],
+                            stats["start_bytes"]/1024/1024,
+                            stats["end_bytes"]/1024/1024
+                        )
+                except Exception as e:
+                    log.warning("Retention check failed: %s", e)
 
             consecutive_errors = 0
             time.sleep(float(SAMPLE_SEC))
