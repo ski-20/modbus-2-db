@@ -1,51 +1,46 @@
 {% extends "base.html" %}
 {% block content %}
 
-<div class="row g-2 mb-3">
-  <div class="col-md-4">
+<form id="f" class="row g-2 mb-3">
+  <div class="col-sm-4">
     <label class="form-label">Tag</label>
     <select class="form-select" name="tag" id="tag">
       <option value="">(all)</option>
       {% for r in tags %}
-        <option value="{{ r.tag }}" {% if r.tag == selections.tag %}selected{% endif %}>
+        <option value="{{ r.tag }}" {% if r.tag == cur_tag %}selected{% endif %}>
           {{ r.label }}
         </option>
       {% endfor %}
     </select>
   </div>
-
-  <div class="col-md-3">
-    <label class="form-label">Calendar Range</label>
+  <div class="col-sm-2">
+    <label class="form-label">Date Range</label>
     <select class="form-select" name="cal" id="cal">
-      <option value="all" {% if selections.cal == 'all' %}selected{% endif %}>(all)</option>
-      <option value="today" {% if selections.cal == 'today' %}selected{% endif %}>Today</option>
-      <option value="yesterday" {% if selections.cal == 'yesterday' %}selected{% endif %}>Yesterday</option>
-      <option value="week" {% if selections.cal == 'week' %}selected{% endif %}>This Week</option>
-      <option value="month" {% if selections.cal == 'month' %}selected{% endif %}>This Month</option>
-      <option value="year" {% if selections.cal == 'year' %}selected{% endif %}>This Year</option>
+      <option value="all" {% if cur_cal == 'all' %}selected{% endif %}>(all)</option>
+      <option value="today" {% if cur_cal == 'today' %}selected{% endif %}>Today</option>
+      <option value="yesterday" {% if cur_cal == 'yesterday' %}selected{% endif %}>Yesterday</option>
+      <option value="week" {% if cur_cal == 'week' %}selected{% endif %}>This Week</option>
+      <option value="month" {% if cur_cal == 'month' %}selected{% endif %}>This Month</option>
+      <option value="year" {% if cur_cal == 'year' %}selected{% endif %}>This Year</option>
     </select>
   </div>
-
-  <div class="col-md-2">
+  <div class="col-sm-2">
     <label class="form-label">Limit</label>
-    <input type="number" class="form-control" name="limit" id="limit"
-           value="{{ selections.limit or 500 }}">
+    <input class="form-control" name="limit" id="limit" value="500">
   </div>
-
-  <div class="col-md-2">
+  <div class="col-sm-2">
     <label class="form-label">Bucket (sec, optional)</label>
-    <input type="number" class="form-control" name="bucket_s" id="bucket_s"
-           value="{{ selections.bucket_s or '' }}">
+    <input class="form-control" name="bucket_s" id="bucket_s">
   </div>
-
-  <div class="col-md-1 align-self-end">
-    <button class="btn btn-primary w-100" id="loadBtn">Load</button>
+  <div class="col-sm-2 align-self-end">
+    <button id="loadBtn" class="btn btn-primary w-100" type="button">Load</button>
   </div>
-</div>
+</form>
 
 <div class="mb-2">
   <a id="dl" class="btn btn-outline-secondary btn-sm" href="#">Download CSV</a>
 </div>
+
 
 <div class="table-responsive">
   <table class="table table-sm table-striped" id="tbl">
