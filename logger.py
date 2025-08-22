@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-import time, struct, sqlite3, threading, random
+import time, struct, sqlite3, threading, random, os, shutil
 from datetime import datetime, timezone
 import logging
 
@@ -161,6 +161,66 @@ def hydrate_baseline_from_db():
             last_value[str(tag)]  = None
         last_logged[str(tag)] = _iso_to_epoch_utc(ts_text) or 0.0
 
+def _filesize_sum(path: str) -> int:
+    total = 0
+    for p in (path, f"{path}-wal", f"{path}-shm"):
+        try: total += os.path.getsize(p)
+        except OSError: pass
+    return total
+
+def init_storage_on_restart():
+    """
+    Safe storage hygiene at boot:
+      - Ensure WAL
+      - If auto_vacuum not initialized: SKIP VACUUM for big DBs; warn
+      - Always checkpoint WAL
+      - Reclaim some free pages (incremental) without long stalls
+    """
+    BIG_DB_BYTES = 5 * 1024 * 1024 * 1024  # 5 GB threshold (tune)
+    INCR_PAGES_BOOT = 10_000               # ~10k pages per boot (tune)
+
+    size_bytes = _filesize_sum(DB)
+    con = sqlite3.connect(DB, timeout=60)
+    cur = con.cursor()
+    try:
+        cur.execute("PRAGMA journal_mode=WAL;")
+
+        # One-time enable incremental autovacuum, but avoid VACUUM on big DBs
+        cur.execute("PRAGMA auto_vacuum")
+        mode = cur.fetchone()[0]  # 0=NONE, 1=FULL, 2=INCREMENTAL
+        if mode != 2:
+            # Check if we already marked initialization in your state table
+            cur.execute("SELECT value FROM state WHERE key='autovacuum_initialized'")
+            row = cur.fetchone()
+            already = (row and int(row[0]) == 1)
+
+            if not already:
+                if size_bytes < BIG_DB_BYTES:
+                    # Small enough: do once at boot
+                    cur.execute("PRAGMA auto_vacuum=INCREMENTAL"); con.commit()
+                    cur.execute("VACUUM"); con.commit()  # one-time heavy step
+                    cur.execute("""INSERT INTO state(key,value)
+                                   VALUES('autovacuum_initialized',1)
+                                   ON CONFLICT(key) DO UPDATE SET value=excluded.value""")
+                    con.commit()
+                else:
+                    # Too big: defer to maintenance window
+                    log.warning("Skipping one-time VACUUM on large DB (~%.1f GB). "
+                                "Run maintenance to enable incremental autovacuum.",
+                                size_bytes/1024/1024/1024)
+
+        # Always shrink WAL at boot
+        cur.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+
+        # Reclaim some free pages without stalling boot
+        # If incremental mode is active, this will actually shrink the file.
+        pages = INCR_PAGES_BOOT if size_bytes >= BIG_DB_BYTES else 0  # 0=reclaim all (OK for small DB)
+        cur.execute(f"PRAGMA incremental_vacuum({int(pages)})")
+        con.commit()
+    finally:
+        cur.close(); con.close()
+
+
 # ------------------ Modbus decode helpers ------------------
 def to_int16(w):   return w - 65536 if w >= 32768 else w
 def to_uint16(w):  return w
@@ -254,6 +314,9 @@ def eval_condition(cond, values_by_name):
 def main():
     ensure_schema()
     upsert_tag_meta_from_tags()
+
+    # Auto storage hygiene on every restart
+    init_storage_on_restart()
 
     # Hydrate baselines so on_change/conditional don't fire immediately after restart
     hydrate_baseline_from_db()
