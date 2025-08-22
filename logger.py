@@ -58,12 +58,15 @@ def ensure_schema():
     cur.execute("PRAGMA journal_mode=WAL;")
     cur.execute("PRAGMA busy_timeout=2000;")
 
-    # If the DB is brand-new (no tables yet), enable incremental auto-vacuum
+    # Is this a brand-new DB (no tables yet)?
     cur.execute("SELECT COUNT(*) FROM sqlite_master WHERE type='table'")
-    n_tables = cur.fetchone()[0]
-    if n_tables == 0:
+    fresh_db = (cur.fetchone()[0] == 0)
+
+    # For a brand-new DB, set auto_vacuum BEFORE creating any tables.
+    # This writes the setting into the file header; no VACUUM needed.
+    if fresh_db:
         cur.execute("PRAGMA auto_vacuum=INCREMENTAL")
-        con.commit()  # persist in the brand-new file header
+        con.commit()  # persist the pragma into the just-created file
 
     cur.execute("""
       CREATE TABLE IF NOT EXISTS logs (
