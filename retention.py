@@ -2,6 +2,7 @@
 import os, sqlite3, time, argparse
 from dataclasses import dataclass
 from datetime import datetime, timedelta
+from typing import Optional, List
 
 DEFAULT_PRIMARY_PURGE = ["SYS_WetWellLevel"]  # fallback if none provided
 
