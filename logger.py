@@ -12,6 +12,9 @@ except Exception:
     PLC_IP, PLC_PORT = "10.0.0.1", 502
     WORD_ORDER = "HL"   # "HL" = hi-word first in %MWn, %MWn+1; use "LH" if low-word first
 
+# default absolute deadband for on change tag logging
+DEFAULT_DB_ABS = 0.05
+
 # Tags + cadences come from tags.py
 from tags import TAGS, FAST_SEC, SAMPLE_SEC
 
@@ -298,7 +301,7 @@ def main():
 
                 elif mode == "on_change":
                     prev = last_value.get(name)
-                    db_abs = t.get("deadband_abs", None)
+                    db_abs = t.get("deadband_abs", DEFAULT_DB_ABS if t.get("mode")=="on_change" else None)
                     db_pct = t.get("deadband_pct", None)
                     min_int = float(t.get("min_interval_sec", 0.0))
                     if changed_enough(prev, float(val), db_abs, db_pct) and due_every(name, now_s, min_int):
