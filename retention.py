@@ -43,25 +43,44 @@ def enforce_quota_periodic(cfg: RetentionConfig) -> dict:
     return enforce_quota_now(cfg)
 
 def enforce_quota_now(cfg: RetentionConfig) -> dict:
-    """Enforce size cap immediately. Returns stats dict for logging."""
     stats = {"phase": [], "start_bytes": 0, "end_bytes": 0, "deleted": 0}
-    max_bytes = cfg.max_db_mb * 1024 * 1024
-    primary = cfg.primary_purge_tags or DEFAULT_PRIMARY_PURGE
 
-    # 1) Checkpoint WAL first so size reflects reality
+    def _sumsize():
+        return _filesize_sum(cfg.db_path)
+
+    def _checkpoint():
+        with _connect(cfg.db_path) as con:
+            con.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+
+    def _incr_vac(pages: int):
+        with _connect(cfg.db_path) as con:
+            con.execute(f"PRAGMA incremental_vacuum({int(pages)})")
+
+    # Preflight: bail if autovacuum isn't enabled yet
     with _connect(cfg.db_path) as con:
-        con.execute("PRAGMA wal_checkpoint(TRUNCATE)")
-    size = _filesize_sum(cfg.db_path)
+        cur = con.cursor()
+        cur.execute("PRAGMA auto_vacuum")
+        av = cur.fetchone()[0]  # 0 NONE, 1 FULL, 2 INCREMENTAL
+    if av != 2:
+        # Don't delete if we can't shrink the file — return early
+        stats["phase"].append("skipped_autovacuum_off")
+        stats["start_bytes"] = stats["end_bytes"] = _sumsize()
+        return stats
+
+    # Start by shrinking WAL so our size measurement is real
+    _checkpoint()
+    size = _sumsize()
     stats["start_bytes"] = size
+    max_bytes = cfg.max_db_mb * 1024 * 1024
+
     if size <= max_bytes:
         stats["end_bytes"] = size
         return stats
 
-    # Helper deletions
+    # ---- Phase 1: delete anything older than raw_keep_days (best-effort) ----
     def delete_before(cutoff_iso: str, limit_rows: int) -> int:
         with _connect(cfg.db_path) as con:
             cur = con.cursor()
-            # SQLite-friendly pattern using rowid selection
             cur.execute("""
                 DELETE FROM logs
                 WHERE rowid IN (
@@ -75,6 +94,62 @@ def enforce_quota_now(cfg: RetentionConfig) -> dict:
             con.commit()
         return n
 
+    if cfg.raw_keep_days and cfg.raw_keep_days > 0:
+        cutoff_iso = (datetime.utcnow() - timedelta(days=int(cfg.raw_keep_days))).isoformat()
+        # loop while over cap; trim oldest-outside-window first
+        while size > max_bytes:
+            deleted = delete_before(cutoff_iso, cfg.delete_batch)
+            if deleted == 0:
+                break
+            stats["deleted"] += deleted
+            _incr_vac(cfg.incremental_vacuum_pages)
+            _checkpoint()
+            new_size = _sumsize()
+            if new_size >= size - (512 * 1024):  # <0.5MB improvement -> bail
+                break
+            size = new_size
+
+    stats["phase"].append("older_than_keep_days")
+
+    # ---- Phase 2a: primary tags first ----
+    before_bytes = size
+    primary = (cfg.primary_purge_tags or ["SYS_WetWellLevel"])
+
+    def delete_oldest_for_tag(tag: str, limit_rows: int) -> int:
+        with _connect(cfg.db_path) as con:
+            cur = con.cursor()
+            cur.execute("""
+                DELETE FROM logs
+                WHERE rowid IN (
+                    SELECT rowid FROM logs
+                    WHERE tag = ?
+                    ORDER BY ts ASC
+                    LIMIT ?
+                )
+            """, (tag, int(limit_rows)))
+            n = cur.rowcount if cur.rowcount != -1 else 0
+            con.commit()
+        return n
+
+    for tag in primary:
+        while size > max_bytes:
+            deleted = delete_oldest_for_tag(tag, cfg.delete_batch)
+            if deleted == 0:
+                break
+            stats["deleted"] += deleted
+            _incr_vac(cfg.incremental_vacuum_pages)
+            _checkpoint()
+            new_size = _sumsize()
+
+            # Safety: if no shrink after a large delete, stop and warn
+            if new_size >= size - (512 * 1024):  # < 0.5 MB improvement
+                # avoid wiping tons of rows when shrink isn't happening
+                break
+            size = new_size
+
+    stats["phase"].append("oldest_primary_tags")
+
+    # ---- Phase 2b: still over? global oldest ----
     def delete_oldest(limit_rows: int) -> int:
         with _connect(cfg.db_path) as con:
             cur = con.cursor()
@@ -90,63 +165,24 @@ def enforce_quota_now(cfg: RetentionConfig) -> dict:
             con.commit()
         return n
 
-    def incremental_vacuum():
-        with _connect(cfg.db_path) as con:
-            con.execute(f"PRAGMA incremental_vacuum({int(cfg.incremental_vacuum_pages)})")
-
-    # 2) Phase 1: delete anything older than raw_keep_days
-    cutoff_iso = (datetime.utcnow() - timedelta(days=cfg.raw_keep_days)).isoformat()
-    while size > max_bytes:
-        deleted = delete_before(cutoff_iso, cfg.delete_batch)
-        if deleted == 0:
-            break
-        stats["deleted"] += deleted
-        incremental_vacuum()
-        size = _filesize_sum(cfg.db_path)
-    stats["phase"].append("older_than_keep_days")
-
-    # ---- Phase 2a: purge oldest from primary tags first ----
-    def delete_oldest_for_tag(tag: str, limit_rows: int) -> int:
-        with _connect(cfg.db_path) as con:
-            cur = con.cursor()
-            cur.execute("""
-                DELETE FROM logs
-                WHERE rowid IN (
-                  SELECT rowid FROM logs
-                  WHERE tag = ?
-                  ORDER BY ts ASC
-                  LIMIT ?
-                )
-            """, (tag, int(limit_rows)))
-            n = cur.rowcount if cur.rowcount != -1 else 0
-            con.commit()
-        return n
-
-    for tag in primary:
-        while size > max_bytes:
-            deleted = delete_oldest_for_tag(tag, cfg.delete_batch)
-            if deleted == 0:
-                break
-            stats["deleted"] += deleted
-            incremental_vacuum()
-            size = _filesize_sum(cfg.db_path)
-    stats["phase"].append("oldest_primary_tags")
-
-    # ---- Phase 2b: still over? purge oldest globally ----
     while size > max_bytes:
         deleted = delete_oldest(cfg.delete_batch)
         if deleted == 0:
             break
         stats["deleted"] += deleted
-        incremental_vacuum()
-        size = _filesize_sum(cfg.db_path)
+        _incr_vac(cfg.incremental_vacuum_pages)
+        _checkpoint()
+        new_size = _sumsize()
+        if new_size >= size - (512 * 1024):
+            break
+        size = new_size
+
     stats["phase"].append("oldest_any_age")
 
-
-    # 4) Final checkpoint and size
-    with _connect(cfg.db_path) as con:
-        con.execute("PRAGMA wal_checkpoint(TRUNCATE)")
-    stats["end_bytes"] = _filesize_sum(cfg.db_path)
+    # Final reclaim and measurement
+    _incr_vac(0)          # reclaim all possible free pages now
+    _checkpoint()         # and shrink WAL
+    stats["end_bytes"] = _sumsize()
     return stats
 
 # ---------- Optional one-time setup ----------

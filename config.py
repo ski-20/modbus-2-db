@@ -14,9 +14,9 @@ LOCAL_TZ = "America/New_York"   # e.g., "America/New_York", "UTC", etc.
 # Database storage/retention options
 RETENTION = {
     "max_db_mb": 1,          # hard cap (MB), DB + WAL/SHM
-    "raw_keep_days": 30,         # keep full-fidelity rows this many days
+    "raw_keep_days": 36500,         # keep full-fidelity rows this many days
     "delete_batch": 10_000,      # rows per delete batch
-    "enforce_every_s": 600,      # how often to run the cleanup
+    "enforce_every_s": 60,      # how often to run the cleanup
     "incremental_vacuum_pages": 2000,
     "primary_purge_tags": ["SYS_WetWellLevel"], # trim continuous tags first to save space
 }

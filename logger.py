@@ -418,12 +418,11 @@ def main():
                 try:
                     stats = enforce_quota_periodic(ret_cfg)
                     if not stats.get("skipped"):
-                        log.info(
-                            "Retention: deleted=%s size %.1fMB→%.1fMB",
+                        log.info("Retention: deleted=%s size %.3fMB→%.3fMB phases=%s",
                             stats["deleted"],
-                            stats["start_bytes"]/1024/1024,
-                            stats["end_bytes"]/1024/1024
-                        )
+                            stats["start_bytes"]/1048576,
+                            stats["end_bytes"]/1048576,
+                            ",".join(stats.get("phase", [])))
                 except Exception as e:
                     log.warning("Retention check failed: %s", e)
 
