@@ -58,15 +58,23 @@ def ensure_schema():
     cur.execute("PRAGMA journal_mode=WAL;")
     cur.execute("PRAGMA busy_timeout=2000;")
 
-    # Is this a brand-new DB (no tables yet)?
-    cur.execute("SELECT COUNT(*) FROM sqlite_master WHERE type='table'")
-    fresh_db = (cur.fetchone()[0] == 0)
+    # Always set busy + WAL up front
+    cur.execute("PRAGMA busy_timeout=2000;")
+    cur.execute("PRAGMA journal_mode=WAL;")
+    cur.execute("PRAGMA journal_mode;")
+    jm = cur.fetchone()[0]
 
-    # For a brand-new DB, set auto_vacuum BEFORE creating any tables.
-    # This writes the setting into the file header; no VACUUM needed.
-    if fresh_db:
+    # Inspect current state before doing anything
+    cur.execute("PRAGMA auto_vacuum")
+    av_before = cur.fetchone()[0]  # 0 NONE, 1 FULL, 2 INCREMENTAL
+    cur.execute("SELECT COUNT(*) FROM sqlite_master WHERE type='table'")
+    table_count = cur.fetchone()[0]
+    fresh_db = (table_count == 0)
+
+    # On a brand-new DB (no tables), set auto_vacuum BEFORE any CREATE TABLE.
+    if fresh_db and av_before != 2:
         cur.execute("PRAGMA auto_vacuum=INCREMENTAL")
-        con.commit()  # persist the pragma into the just-created file
+        con.commit()
 
     cur.execute("""
       CREATE TABLE IF NOT EXISTS logs (
@@ -95,13 +103,26 @@ def ensure_schema():
     """)
     con.commit()
 
-        # --- Debug: log the final mode so you can verify in logs/status ---
-    try:
-        cur.execute("PRAGMA auto_vacuum"); av = cur.fetchone()[0]
-        cur.execute("PRAGMA journal_mode"); jm = cur.fetchone()[0]
-        log.info(f"SQLite modes: auto_vacuum={av} (2=INCREMENTAL), journal_mode={jm}")
-    except Exception:
-        pass
+    # Report after
+    cur.execute("PRAGMA auto_vacuum")
+    av_after = cur.fetchone()[0]
+
+    log.info(
+        "SQLite init: path=%s exists=%s tables_before=%d fresh=%s "
+        "auto_vacuum_before=%s after=%s (2=INCREMENTAL) journal_mode=%s",
+        DB, os.path.exists(DB), table_count, fresh_db, av_before, av_after, jm
+    )
+
+    # If not fresh and still NONE, something else created tables first
+    if not fresh_db and av_after != 2:
+        size_mb = _filesize_sum(DB) / (1024*1024)
+        log.warning(
+            "DB was not fresh and auto_vacuum is %s (expected 2). "
+            "Likely another process created tables first. "
+            "Current size ≈ %.1f MB. Either run a one-time VACUUM conversion "
+            "or ensure that process also sets auto_vacuum before schema creation.",
+            av_after, size_mb
+        )
     
     cur.close(); con.close()
 
