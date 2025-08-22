@@ -58,11 +58,11 @@ def ensure_schema():
     cur.execute("PRAGMA journal_mode=WAL;")
     cur.execute("PRAGMA busy_timeout=2000;")
 
-    # Always set busy + WAL up front
+    # Pragmas first (before any schema)
     cur.execute("PRAGMA busy_timeout=2000;")
     cur.execute("PRAGMA journal_mode=WAL;")
-    cur.execute("PRAGMA journal_mode;")
-    jm = cur.fetchone()[0]
+    cur.execute("PRAGMA auto_vacuum=INCREMENTAL")   # <-- set desired mode early
+    con.commit()
 
     # Inspect current state before doing anything
     cur.execute("PRAGMA auto_vacuum")
@@ -103,26 +103,22 @@ def ensure_schema():
     """)
     con.commit()
 
-    # Report after
+    # Verify; if not persisted, do a one-time conversion (fast on fresh DB)
     cur.execute("PRAGMA auto_vacuum")
-    av_after = cur.fetchone()[0]
+    av = cur.fetchone()[0]  # 0 NONE, 1 FULL, 2 INCREMENTAL
+    if av != 2:
+        # One-time rewrite so header stores autovacuum; very fast on new DB
+        cur.execute("PRAGMA auto_vacuum=INCREMENTAL")
+        con.commit()
+        cur.execute("VACUUM")
+        con.commit()
+        cur.execute("PRAGMA auto_vacuum")
+        av = cur.fetchone()[0]
 
-    log.info(
-        "SQLite init: path=%s exists=%s tables_before=%d fresh=%s "
-        "auto_vacuum_before=%s after=%s (2=INCREMENTAL) journal_mode=%s",
-        DB, os.path.exists(DB), table_count, fresh_db, av_before, av_after, jm
-    )
-
-    # If not fresh and still NONE, something else created tables first
-    if not fresh_db and av_after != 2:
-        size_mb = _filesize_sum(DB) / (1024*1024)
-        log.warning(
-            "DB was not fresh and auto_vacuum is %s (expected 2). "
-            "Likely another process created tables first. "
-            "Current size ≈ %.1f MB. Either run a one-time VACUUM conversion "
-            "or ensure that process also sets auto_vacuum before schema creation.",
-            av_after, size_mb
-        )
+    # Log final modes so you can confirm in logs/status
+    cur.execute("PRAGMA journal_mode")
+    jm = cur.fetchone()[0]
+    log.info("SQLite modes: auto_vacuum=%s (2=INCREMENTAL), journal_mode=%s", av, jm)
     
     cur.close(); con.close()
 
