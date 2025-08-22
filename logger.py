@@ -93,7 +93,17 @@ def ensure_schema():
         dtype  TEXT
       )
     """)
-    con.commit(); con.close()
+    con.commit()
+
+        # --- Debug: log the final mode so you can verify in logs/status ---
+    try:
+        cur.execute("PRAGMA auto_vacuum"); av = cur.fetchone()[0]
+        cur.execute("PRAGMA journal_mode"); jm = cur.fetchone()[0]
+        log.info(f"SQLite modes: auto_vacuum={av} (2=INCREMENTAL), journal_mode={jm}")
+    except Exception:
+        pass
+    
+    cur.close(); con.close()
 
 def upsert_tag_meta_from_tags():
     """Logger is the sole owner of tag_meta contents."""
