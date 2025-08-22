@@ -12,5 +12,17 @@
     <tr><td>rows_written_last_flush</td><td>{{ s.rows_written_last_flush|default('') }}</td></tr>
   </tbody>
 </table>
-<p>JSON: <a href="/status">/status</a></p>
+{% if storage %}
+<hr>
+
+<h5>Storage</h5>
+<ul class="mb-2">
+  <li>Used / Cap (MB): <strong>{{ storage.total_mb }}/{{ storage.cap_mb }}</strong> ({{ storage.pct_of_cap }}%)</li>
+  <li>DB / WAL / SHM (MB): {{ storage.db_mb }} / {{ storage.wal_mb }} / {{ storage.shm_mb }}</li>
+  <li>Auto-vacuum / Journal: {{ storage.auto_vacuum_label }} / {{ storage.journal_mode }}</li>
+  <li>Pages / Free pages: {{ storage.page_count }} / {{ storage.freelist_count }}</li>
+  <li>Rows (logs): {{ storage.row_count }}</li>
+  <li>Oldest / Newest: {{ storage.min_ts or '—' }} / {{ storage.max_ts or '—' }}</li>
+</ul>
+{% endif %}
 {% endblock %}
