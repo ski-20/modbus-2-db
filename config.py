@@ -13,7 +13,7 @@ LOCAL_TZ = "America/New_York"   # e.g., "America/New_York", "UTC", etc.
 
 # Database storage/retention options
 RETENTION = {
-    "max_db_mb": 20000,          # hard cap (MB), DB + WAL/SHM
+    "max_db_mb": 1,          # hard cap (MB), DB + WAL/SHM
     "raw_keep_days": 30,         # keep full-fidelity rows this many days
     "delete_batch": 10_000,      # rows per delete batch
     "enforce_every_s": 600,      # how often to run the cleanup
