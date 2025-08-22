@@ -24,27 +24,27 @@ def pump_tags(base: int, pump_key: str, pump_label: str):
 
         {"name":f"{pump_key}_OutputFreq", "label":f"{pump_label} Output Frequency",
          "mw":base+1,  "dtype":"INT16", "scale":0.1, "unit":"Hz.",
-         "mode":"conditional", "condition":{"tag":f"{pump_key}_Status","op":"==","value":1}},
+         "mode":"conditional", "condition":{"tag":f"{pump_key}_MotorStatus","op":"==","value":1}},
 
         {"name":f"{pump_key}_MotorCurrent", "label":f"{pump_label} Motor Current",
          "mw":base+2,  "dtype":"INT16", "scale":0.1, "unit":"A",
-         "mode":"conditional", "condition":{"tag":f"{pump_key}_Status","op":"==","value":1}},
+         "mode":"conditional", "condition":{"tag":f"{pump_key}_MotorStatus","op":"==","value":1}},
 
         {"name":f"{pump_key}_MotorTorque", "label":f"{pump_label} Motor Torque",
          "mw":base+3,  "dtype":"INT16", "scale":0.1, "unit":"%",
-         "mode":"conditional", "condition":{"tag":f"{pump_key}_Status","op":"==","value":1}},
+         "mode":"conditional", "condition":{"tag":f"{pump_key}_MotorStatus","op":"==","value":1}},
 
         {"name":f"{pump_key}_LineVoltage", "label":f"{pump_label} Line Mains Voltage",
          "mw":base+4,  "dtype":"INT16", "scale":0.1, "unit":"V",
-         "mode":"conditional", "condition":{"tag":f"{pump_key}_Status","op":"==","value":1}},
+         "mode":"conditional", "condition":{"tag":f"{pump_key}_MotorStatus","op":"==","value":1}},
 
         {"name":f"{pump_key}_DrvThermalState", "label":f"{pump_label} Drive Thermal State",
          "mw":base+5,  "dtype":"INT16", "scale":1.0, "unit":"raw",
-         "mode":"conditional", "condition":{"tag":f"{pump_key}_Status","op":"==","value":1}},
+         "mode":"conditional", "condition":{"tag":f"{pump_key}_MotorStatus","op":"==","value":1}},
 
         {"name":f"{pump_key}_MotorPower", "label":f"{pump_label} Motor Power",
          "mw":base+6,  "dtype":"UINT16", "scale":1.0, "unit":"",
-         "mode":"conditional", "condition":{"tag":f"{pump_key}_Status","op":"==","value":1}},
+         "mode":"conditional", "condition":{"tag":f"{pump_key}_MotorStatus","op":"==","value":1}},
 
         {"name":f"{pump_key}_FaultCode", "label":f"{pump_label} Previous Fault",
          "mw":base+7,  "dtype":"UINT16", "scale":1.0, "unit":"",
