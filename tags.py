@@ -56,7 +56,7 @@ def pump_tags(base: int, pump_key: str, pump_label: str):
 
         {"name":f"{pump_key}_TotalHours", "label":f"{pump_label} Total Hours",
          "mw":base+10, "dtype":"INT32", "scale":0.1, "unit":"hr.",
-         "mode":"interval", "interval_sec":60},
+         "mode":"on_change"},
 
         {"name":f"{pump_key}_MotorStatus", "label":f"{pump_label} Motor Status (Off/Running/Fault)",
          "mw":base+12, "dtype":"UINT16", "scale":1.0, "unit":"",
