@@ -9,7 +9,7 @@ from .db import (
 from .modbus import mb_client, float_to_words, read_setpoint_block_dyn
 
 #strage status imports
-from storage_status import get_storage_status
+from .storage_status import get_storage_status
 try:
     from config import DB, RETENTION
 except Exception:
