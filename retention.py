@@ -3,7 +3,7 @@ import os, sqlite3, time, argparse
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 
-PRIMARY_PURGE_TAGS = cfg.primary_purge_tags if hasattr(cfg, "primary_purge_tags") else ["SYS_WetWellLevel"]
+DEFAULT_PRIMARY_PURGE = ["SYS_WetWellLevel"]  # fallback if none provided
 
 # ---------- Helpers ----------
 def _filesize_sum(path: str) -> int:
@@ -45,6 +45,7 @@ def enforce_quota_now(cfg: RetentionConfig) -> dict:
     """Enforce size cap immediately. Returns stats dict for logging."""
     stats = {"phase": [], "start_bytes": 0, "end_bytes": 0, "deleted": 0}
     max_bytes = cfg.max_db_mb * 1024 * 1024
+    primary = cfg.primary_purge_tags or DEFAULT_PRIMARY_PURGE
 
     # 1) Checkpoint WAL first so size reflects reality
     with _connect(cfg.db_path) as con:
