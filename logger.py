@@ -57,6 +57,14 @@ def ensure_schema():
     cur = con.cursor()
     cur.execute("PRAGMA journal_mode=WAL;")
     cur.execute("PRAGMA busy_timeout=2000;")
+
+    # If the DB is brand-new (no tables yet), enable incremental auto-vacuum
+    cur.execute("SELECT COUNT(*) FROM sqlite_master WHERE type='table'")
+    n_tables = cur.fetchone()[0]
+    if n_tables == 0:
+        cur.execute("PRAGMA auto_vacuum=INCREMENTAL")
+        con.commit()  # persist in the brand-new file header
+
     cur.execute("""
       CREATE TABLE IF NOT EXISTS logs (
         ts   TEXT NOT NULL,
@@ -169,57 +177,14 @@ def _filesize_sum(path: str) -> int:
     return total
 
 def init_storage_on_restart():
-    """
-    Safe storage hygiene at boot:
-      - Ensure WAL
-      - If auto_vacuum not initialized: SKIP VACUUM for big DBs; warn
-      - Always checkpoint WAL
-      - Reclaim some free pages (incremental) without long stalls
-    """
-    BIG_DB_BYTES = 5 * 1024 * 1024 * 1024  # 5 GB threshold (tune)
-    INCR_PAGES_BOOT = 10_000               # ~10k pages per boot (tune)
-
-    size_bytes = _filesize_sum(DB)
-    con = sqlite3.connect(DB, timeout=60)
+    con = sqlite3.connect(DB, timeout=30)
     cur = con.cursor()
     try:
-        cur.execute("PRAGMA journal_mode=WAL;")
-
-        # One-time enable incremental autovacuum, but avoid VACUUM on big DBs
-        cur.execute("PRAGMA auto_vacuum")
-        mode = cur.fetchone()[0]  # 0=NONE, 1=FULL, 2=INCREMENTAL
-        if mode != 2:
-            # Check if we already marked initialization in your state table
-            cur.execute("SELECT value FROM state WHERE key='autovacuum_initialized'")
-            row = cur.fetchone()
-            already = (row and int(row[0]) == 1)
-
-            if not already:
-                if size_bytes < BIG_DB_BYTES:
-                    # Small enough: do once at boot
-                    cur.execute("PRAGMA auto_vacuum=INCREMENTAL"); con.commit()
-                    cur.execute("VACUUM"); con.commit()  # one-time heavy step
-                    cur.execute("""INSERT INTO state(key,value)
-                                   VALUES('autovacuum_initialized',1)
-                                   ON CONFLICT(key) DO UPDATE SET value=excluded.value""")
-                    con.commit()
-                else:
-                    # Too big: defer to maintenance window
-                    log.warning("Skipping one-time VACUUM on large DB (~%.1f GB). "
-                                "Run maintenance to enable incremental autovacuum.",
-                                size_bytes/1024/1024/1024)
-
-        # Always shrink WAL at boot
-        cur.execute("PRAGMA wal_checkpoint(TRUNCATE)")
-
-        # Reclaim some free pages without stalling boot
-        # If incremental mode is active, this will actually shrink the file.
-        pages = INCR_PAGES_BOOT if size_bytes >= BIG_DB_BYTES else 0  # 0=reclaim all (OK for small DB)
-        cur.execute(f"PRAGMA incremental_vacuum({int(pages)})")
+        cur.execute("PRAGMA wal_checkpoint(TRUNCATE)")  # shrink WAL from last run
+        cur.execute("PRAGMA incremental_vacuum(5000)")  # reclaim some free pages
         con.commit()
     finally:
         cur.close(); con.close()
-
 
 # ------------------ Modbus decode helpers ------------------
 def to_int16(w):   return w - 65536 if w >= 32768 else w
