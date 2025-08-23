@@ -1,8 +1,8 @@
 # tags.py
 # Central definition of all tags and their logging modes
 
-FAST_SEC   = 0.2  # fast cadence for conditional tags
-SAMPLE_SEC = 0.2   # poll interval for Modbus reads
+FAST_SEC   = 1.0  # fast cadence for conditional tags
+SAMPLE_SEC = 0.5   # poll interval for Modbus reads
 
 # --- System tags ---
 SYSTEM_TAGS = [
