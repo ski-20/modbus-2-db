@@ -4,7 +4,7 @@ from flask import Blueprint, request, jsonify, Response, stream_with_context
 from config import DB_ROOT, RETENTION, LOCAL_TZ
 from tags import TAGS
 from chunks import query_logs, init_family_router, meta_path
-import csv, io, os
+import csv, io, os, sqlite3
 from datetime import datetime, timezone, timedelta
 
 # Optional: week start (0=Mon..6=Sun)
