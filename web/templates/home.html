@@ -1,15 +1,13 @@
 {% extends "base.html" %}
 {% block content %}
 
-<form id="f" class="row g-2 mb-3">
+<form id="f" class="row g-2 mb-3 align-items-end">
   <div class="col-12 col-lg-4">
     <label class="form-label">Tag</label>
     <select class="form-select" id="tag">
       <option value="">(all)</option>
       {% for r in tags %}
-        <option value="{{ r.tag }}" {% if r.tag == selections.tag %}selected{% endif %}>
-          {{ r.label }}
-        </option>
+        <option value="{{ r.tag }}" {% if r.tag == selections.tag %}selected{% endif %}>{{ r.label }}</option>
       {% endfor %}
     </select>
   </div>
@@ -27,8 +25,8 @@
     </select>
   </div>
 
-  <!-- Full width on small screens; shows only when 'custom' -->
-  <div class="col-12" id="customRange" style="display:none">
+  <!-- shows only when 'custom' -->
+  <div class="col-12 col-lg-4 d-none" id="customRange">
     <label class="form-label">Custom (Local time)</label>
     <div class="row g-2">
       <div class="col-12 col-md-6">
@@ -50,11 +48,10 @@
     <input class="form-control" id="bucket_s" value="{{ selections.bucket_s }}">
   </div>
 
-  <div class="col-6 col-lg-2 align-self-end">
+  <div class="col-6 col-lg-2">
     <button id="loadBtn" class="btn btn-primary w-100" type="button">Load</button>
   </div>
 </form>
-
 
 <div class="mb-2">
   <a id="dl" class="btn btn-outline-secondary btn-sm" href="#">Download CSV</a>
@@ -79,28 +76,38 @@
 {% block scripts %}
 <script>
 (function () {
-  function qs(id){ return document.getElementById(id); }
+  const qs = (id) => document.getElementById(id);
 
-  // Format a UTC ISO string in the configured TZ (falls back to browser TZ)
+  // Format a UTC ISO string in configured TZ (falls back to browser TZ)
   function toLocalTZ(ts){
     if (!ts) return '';
-    // your API returns UTC-naive or UTC; if naive, treat it as UTC
     const d = new Date(ts.endsWith('Z') ? ts : ts + 'Z');
-    const tz = (window.APP_TZ && String(window.APP_TZ)) ||
-               (Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC');
+    const tz = (window.APP_TZ && String(window.APP_TZ))
+            || (Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC');
     try {
       return new Intl.DateTimeFormat(undefined, {
         timeZone: tz,
         year: 'numeric', month: '2-digit', day: '2-digit',
         hour: '2-digit', minute: '2-digit', second: '2-digit'
       }).format(d);
-    } catch (e) {
-      return d.toLocaleString(); // safe fallback
-    }
+    } catch { return d.toLocaleString(); }
+  }
+
+  // Set sensible defaults for custom range (last 1 hour) if fields are blank
+  function ensureCustomDefaults(){
+    const start = qs('start'), end = qs('end');
+    const pad = (n) => String(n).padStart(2,'0');
+    const toInput = (dt) =>
+      `${dt.getFullYear()}-${pad(dt.getMonth()+1)}-${pad(dt.getDate())}T${pad(dt.getHours())}:${pad(dt.getMinutes())}`;
+    const now = new Date();
+    if (!end.value) end.value = toInput(now);
+    if (!start.value) start.value = toInput(new Date(now.getTime() - 60*60*1000));
   }
 
   function toggleCustom(){
-    qs('customRange').style.display = (qs('cal').value === 'custom') ? '' : 'none';
+    const on = qs('cal').value === 'custom';
+    qs('customRange').classList.toggle('d-none', !on);
+    if (on) ensureCustomDefaults();
   }
 
   function buildParams(){
@@ -133,18 +140,13 @@
 
     let resp;
     try { resp = await fetch('/api/logs?' + p.toString(), { cache:'no-store' }); }
-    catch (e) { console.error(e); alert('Network error calling /api/logs.'); return; }
+    catch { alert('Network error calling /api/logs.'); return; }
 
-    if (!resp.ok) {
-      const txt = await resp.text();
-      console.error('API error', resp.status, txt);
-      alert('API error ' + resp.status + ': ' + txt);
-      return;
-    }
+    if (!resp.ok) { alert('API error ' + resp.status + ': ' + (await resp.text())); return; }
 
     let payload;
     try { payload = await resp.json(); }
-    catch (e) { console.error(e); alert('Could not parse /api/logs JSON.'); return; }
+    catch { alert('Could not parse /api/logs JSON.'); return; }
 
     const rows = Array.isArray(payload) ? payload
                 : (Array.isArray(payload.rows) ? payload.rows
@@ -168,8 +170,10 @@
   qs('loadBtn').addEventListener('click', (e) => { e.preventDefault(); loadTable(); });
   qs('cal').addEventListener('change', toggleCustom);
 
+  // Initial paint
   toggleCustom();
   loadTable();
 })();
 </script>
 {% endblock %}
+
