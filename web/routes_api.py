@@ -1,11 +1,19 @@
 # API routes: /api/logs, /api/download.csv
 
-from flask import Blueprint, request, jsonify, Response, stream_with_context
+from flask import Blueprint, request, jsonify, make_response
 from config import DB_ROOT, RETENTION, LOCAL_TZ
 from tags import TAGS
 from chunks import query_logs, init_family_router, meta_path
 import csv, io, os, sqlite3
+from typing import Optional, Tuple
 from datetime import datetime, timezone, timedelta
+
+try:
+    # optional: if you implemented it
+    from chunks import query_logs_between
+    HAS_QB = True
+except Exception:
+    HAS_QB = False
 
 # Optional: week start (0=Mon..6=Sun)
 try:
@@ -52,11 +60,84 @@ def _tag_map():
         _TAGMAP_CACHE["map"] = d
     return _TAGMAP_CACHE["map"]
 
-def _parse_int(val, default):
-    try:
-        return int(val)
-    except Exception:
-        return default
+def _to_utc(dt_local: datetime) -> str:
+    if _LOCAL_TZ:
+        dt_local = dt_local.replace(tzinfo=_LOCAL_TZ)
+        dt_utc = dt_local.astimezone(timezone.utc)
+    else:
+        dt_utc = dt_local.replace(tzinfo=timezone.utc)
+    return dt_utc.isoformat()
+
+def _parse_int(s, default):
+    try: return int(s)
+    except: return default
+
+def _parse_local_dt(s: str) -> Optional[datetime]:
+     if not s: return None
+     try:
+         return datetime.fromisoformat(s)
+     except Exception:
+         return None
+
+def _bounds_from_request(cal: str, start_s: Optional[str], end_s: Optional[str]) -> Tuple[str, str]:
+     if cal != "custom":
+         return _bounds_for_calendar(cal)
+     start_dt = _parse_local_dt(start_s) if start_s else None
+     end_dt   = _parse_local_dt(end_s)   if end_s   else None
+     now_local = datetime.now(_LOCAL_TZ) if _LOCAL_TZ else datetime.now(timezone.utc)
+     if not end_dt:
+         end_dt = now_local.replace(microsecond=0)
+     if not start_dt:
+         start_dt = end_dt - timedelta(days=1)
+    # If user gave start > end, swap
+     if start_dt > end_dt:
+         start_dt, end_dt = end_dt, start_dt
+     return _to_utc(start_dt), _to_utc(end_dt)
+
+def _filter_by_bounds(rows, start_iso: str, end_iso: str):
+    """rows = [(ts, tag, value, unit), ...] — filter by UTC ISO bounds inclusive."""
+    def _to_epoch(ts: str) -> float:
+        try:
+            dt = datetime.fromisoformat(ts)
+            if dt.tzinfo is None:
+                dt = dt.replace(tzinfo=timezone.utc)
+            return dt.timestamp()
+        except Exception:
+            return -1.0
+    s_ep = _to_epoch(start_iso); e_ep = _to_epoch(end_iso)
+    out = []
+    for ts, tg, val, unit in rows:
+        ep = _to_epoch(ts)
+        if s_ep <= ep <= e_ep:
+            out.append((ts, tg, val, unit))
+    return out
+
+def _bounds_for_calendar(preset: str) -> Tuple[str, str]:
+    now_utc = datetime.now(timezone.utc)
+    now_local = now_utc.astimezone(_LOCAL_TZ) if _LOCAL_TZ else now_utc
+    today = now_local.date()
+    if preset == "today":
+        start_local = datetime(today.year, today.month, today.day, 0, 0, 0)
+        end_local   = now_local.replace(microsecond=0)
+    elif preset == "yesterday":
+        y = today - timedelta(days=1)
+        start_local = datetime(y.year, y.month, y.day, 0, 0, 0)
+        end_local   = datetime(y.year, y.month, y.day, 23, 59, 59)
+    elif preset == "week":
+        delta = (today.weekday() - WEEK_START) % 7
+        week_start = today - timedelta(days=delta)
+        start_local = datetime(week_start.year, week_start.month, week_start.day, 0, 0, 0)
+        end_local   = now_local.replace(microsecond=0)
+    elif preset == "month":
+        start_local = datetime(today.year, today.month, 1, 0, 0, 0)
+        end_local   = now_local.replace(microsecond=0)
+    elif preset == "year":
+        start_local = datetime(today.year, 1, 1, 0, 0, 0)
+        end_local   = now_local.replace(microsecond=0)
+    else:
+        start_local = datetime(1970, 1, 1, 0, 0, 0)
+        end_local   = now_local.replace(microsecond=0)
+    return _to_utc(start_local), _to_utc(end_local)
 
 def _to_iso_utc(dt: datetime) -> str:
     # Ensure ISO in UTC (logger writes UTC-naive; we normalize to UTC-aware ISO)
@@ -104,28 +185,29 @@ def api_logs():
     tag      = (request.args.get("tag") or "").strip() or None
     cal      = (request.args.get("cal") or "all").strip().lower()
     limit    = _parse_int(request.args.get("limit", "500"), 500)
-    bucket_s = request.args.get("bucket_s", "").strip()
-    bucket_s = _parse_int(bucket_s, 0) if bucket_s else 0
+    bucket_s = _parse_int(request.args.get("bucket_s", "") or 0, 0)
+    start_s  = (request.args.get("start") or "").strip() or None
+    end_s    = (request.args.get("end") or "").strip() or None
 
-    # Pull from chunk storage (newest→oldest, across the right families)
-    fetch_limit = limit if bucket_s == 0 else max(limit * 4, 2000)
-    rows = query_logs(DB_ROOT, tag=tag, cal=cal, limit=fetch_limit)
+    start_iso, end_iso = _bounds_from_request(cal, start_s, end_s)
+
+    # Expand fetch a bit when bucketing or custom ranges
+    fetch_limit = limit if bucket_s == 0 and cal != "custom" else max(limit * 4, 2000)
+
+    if HAS_QB:
+        rows = query_logs_between(DB_ROOT, tag=tag, start_iso=start_iso, end_iso=end_iso, limit=fetch_limit)
+    else:
+        # Fallback: pull broader and filter server-side
+        base_rows = query_logs(DB_ROOT, tag=tag, cal="all", limit=fetch_limit)
+        rows = _filter_by_bounds(base_rows, start_iso, end_iso)
 
     if bucket_s > 0:
         rows = _maybe_bucket(rows, bucket_s)
-        rows = rows[:limit]
+    rows = rows[:limit]
 
-    tmap = _tag_map()
-    data = [
-        {
-            "ts": ts,
-            "tag": tg,
-            "label": (tmap.get(tg, {}).get("label") or tg),
-            "value": val,
-            "unit": (unit if unit else tmap.get(tg, {}).get("unit", "")),
-        }
-        for (ts, tg, val, unit) in rows
-    ]
+    tmap = {t["name"]: t.get("label", t["name"]) for t in TAGS}
+    data = [{"ts": ts, "tag": tg, "label": tmap.get(tg, tg), "value": val, "unit": unit}
+            for (ts, tg, val, unit) in rows]
     return jsonify(data)
 
 @api_bp.route("/download.csv")
@@ -133,26 +215,23 @@ def api_download_csv():
     tag      = (request.args.get("tag") or "").strip() or None
     cal      = (request.args.get("cal") or "all").strip().lower()
     limit    = _parse_int(request.args.get("limit", "100000"), 100000)
-    bucket_s = request.args.get("bucket_s", "").strip()
-    bucket_s = _parse_int(bucket_s, 0) if bucket_s else 0
+    bucket_s = _parse_int(request.args.get("bucket_s", "") or 0, 0)
+    start_s  = (request.args.get("start") or "").strip() or None
+    end_s    = (request.args.get("end") or "").strip() or None
 
-    fetch_limit = limit if bucket_s == 0 else max(limit * 2, 5000)
-    rows = query_logs(DB_ROOT, tag=tag, cal=cal, limit=fetch_limit)
+    start_iso, end_iso = _bounds_from_request(cal, start_s, end_s)
+
+    if HAS_QB:
+        rows = query_logs_between(DB_ROOT, tag=tag, start_iso=start_iso, end_iso=end_iso, limit=limit)
+    else:
+        base_rows = query_logs(DB_ROOT, tag=tag, cal="all", limit=limit*4)
+        rows = _filter_by_bounds(base_rows, start_iso, end_iso)
+
     if bucket_s > 0:
         rows = _maybe_bucket(rows, bucket_s)
-        rows = rows[:limit]
 
-    def generate():
-        buf = io.StringIO()
-        w = csv.writer(buf)
-        w.writerow(["ts", "tag", "value", "unit"])
-        yield buf.getvalue(); buf.seek(0); buf.truncate(0)
-        for ts, tg, val, unit in rows:
-            w.writerow([ts, tg, val, unit])
-            yield buf.getvalue(); buf.seek(0); buf.truncate(0)
-
-    headers = {
-        "Content-Type": "text/csv; charset=utf-8",
-        "Content-Disposition": 'attachment; filename="logs.csv"',
-    }
-    return Response(stream_with_context(generate()), headers=headers)
+    csv_text = download_csv(rows)  # your existing helper
+    resp = make_response(csv_text)
+    resp.headers["Content-Type"] = "text/csv"
+    resp.headers["Content-Disposition"] = "attachment; filename=logs.csv"
+    return resp

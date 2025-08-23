@@ -7,31 +7,45 @@
     <select class="form-select" name="tag" id="tag">
       <option value="">(all)</option>
       {% for r in tags %}
-        <option value="{{ r.tag }}" {% if r.tag == cur_tag %}selected{% endif %}>
+        <option value="{{ r.tag }}" {% if r.tag == selections.tag %}selected{% endif %}>
           {{ r.label }}
         </option>
       {% endfor %}
     </select>
   </div>
+
   <div class="col-sm-2">
     <label class="form-label">Date Range</label>
     <select class="form-select" name="cal" id="cal">
-      <option value="all" {% if cur_cal == 'all' %}selected{% endif %}>(all)</option>
-      <option value="today" {% if cur_cal == 'today' %}selected{% endif %}>Today</option>
-      <option value="yesterday" {% if cur_cal == 'yesterday' %}selected{% endif %}>Yesterday</option>
-      <option value="week" {% if cur_cal == 'week' %}selected{% endif %}>This Week</option>
-      <option value="month" {% if cur_cal == 'month' %}selected{% endif %}>This Month</option>
-      <option value="year" {% if cur_cal == 'year' %}selected{% endif %}>This Year</option>
+      <option value="all"       {% if selections.cal == 'all' %}selected{% endif %}>(all)</option>
+      <option value="today"     {% if selections.cal == 'today' %}selected{% endif %}>Today</option>
+      <option value="yesterday" {% if selections.cal == 'yesterday' %}selected{% endif %}>Yesterday</option>
+      <option value="week"      {% if selections.cal == 'week' %}selected{% endif %}>This Week</option>
+      <option value="month"     {% if selections.cal == 'month' %}selected{% endif %}>This Month</option>
+      <option value="year"      {% if selections.cal == 'year' %}selected{% endif %}>This Year</option>
+      <option value="custom"    {% if selections.cal == 'custom' %}selected{% endif %}>Custom…</option>
     </select>
   </div>
+
+  <div class="col-sm-4" id="customRange" style="display:none">
+    <label class="form-label">Custom (Local time)</label>
+    <div class="d-flex gap-2">
+      <input class="form-control" type="datetime-local" id="start">
+      <span class="align-self-center">to</span>
+      <input class="form-control" type="datetime-local" id="end">
+    </div>
+  </div>
+
   <div class="col-sm-2">
     <label class="form-label">Limit</label>
-    <input class="form-control" name="limit" id="limit" value="500">
+    <input class="form-control" name="limit" id="limit" value="{{ selections.limit }}">
   </div>
+
   <div class="col-sm-2">
     <label class="form-label">Bucket (sec, optional)</label>
-    <input class="form-control" name="bucket_s" id="bucket_s">
+    <input class="form-control" name="bucket_s" id="bucket_s" value="{{ selections.bucket_s }}">
   </div>
+
   <div class="col-sm-2 align-self-end">
     <button id="loadBtn" class="btn btn-primary w-100" type="button">Load</button>
   </div>
@@ -40,7 +54,6 @@
 <div class="mb-2">
   <a id="dl" class="btn btn-outline-secondary btn-sm" href="#">Download CSV</a>
 </div>
-
 
 <div class="table-responsive">
   <table class="table table-sm table-striped" id="tbl">
@@ -62,26 +75,9 @@
 <script>
 function qs(id){ return document.getElementById(id); }
 
-function toLocalTZ(ts){
-  if (!ts) return '';
-  // your ts is UTC-naive ISO; add Z so Date parses as UTC
-  const d = new Date(ts.endsWith('Z') ? ts : ts + 'Z');
-  try {
-    return new Intl.DateTimeFormat(undefined, {
-      timeZone: window.APP_TZ || 'UTC',
-      year: 'numeric', month: '2-digit', day: '2-digit',
-      hour: '2-digit', minute: '2-digit', second: '2-digit'
-    }).format(d);
-  } catch (e) {
-    return d.toLocaleString(); // fallback to browser local
-  }
-}
-
-function toOneDecimal(val) {
-  if (val === null || val === undefined) return '';
-  const n = (typeof val === 'number') ? val : Number(val);
-  if (Number.isFinite(n)) return n.toFixed(1);
-  return String(val);
+function toggleCustom(){
+  const on = qs('cal').value === 'custom';
+  qs('customRange').style.display = on ? '' : 'none';
 }
 
 function buildParams(){
@@ -94,28 +90,25 @@ function buildParams(){
   p.set('cal', cal);
   p.set('limit', limit);
   if (bucket) p.set('bucket_s', bucket);
+
+  if (cal === 'custom') {
+    const start = qs('start').value; // "YYYY-MM-DDTHH:MM" local
+    const end   = qs('end').value;
+    if (start) p.set('start', start);
+    if (end)   p.set('end', end);
+  }
   return p;
 }
 
-function renderTable(rows){
-  const tbody = document.querySelector('#tbl tbody');
-  tbody.innerHTML = rows.map(row => {
-    const ts    = row.ts_fmt || row.ts || '';
-    const label = row.label  || row.tag || '';
-    const val   = toOneDecimal(row.value);
-    const unit  = row.unit || '';
-    return `<tr>
-      <td>${toLocalTZ(ts)}</td>
-      <td>${label}</td>
-      <td>${val}</td>
-      <td>${unit}</td>
-    </tr>`;
-  }).join('');
+function toOneDecimal(val) {
+  if (val === null || val === undefined) return '';
+  const n = (typeof val === 'number') ? val : Number(val);
+  if (Number.isFinite(n)) return n.toFixed(1);
+  return String(val);
 }
 
 async function loadTable() {
   const p = buildParams();
-  // Set CSV link
   qs('dl').href = '/api/download.csv?' + p.toString();
 
   let resp;
@@ -123,17 +116,15 @@ async function loadTable() {
     resp = await fetch('/api/logs?' + p.toString(), { cache: 'no-store' });
   } catch (e) {
     console.error('Fetch error:', e);
-    alert('Network error calling /api/logs. See console.');
+    alert('Network error calling /api/logs.');
     return;
   }
-
   if (!resp.ok) {
     const txt = await resp.text();
     console.error('API error:', resp.status, txt);
     alert('API error ' + resp.status + ': ' + txt);
     return;
   }
-
   let payload;
   try {
     payload = await resp.json();
@@ -143,21 +134,29 @@ async function loadTable() {
     return;
   }
 
-  // Robustly extract rows regardless of shape
   const rows = Array.isArray(payload) ? payload
               : (Array.isArray(payload.rows) ? payload.rows
               : (Array.isArray(payload.data) ? payload.data : []));
 
-  renderTable(rows);
+  const tbody = document.querySelector('#tbl tbody');
+  tbody.innerHTML = rows.map(row => {
+    const ts    = row.ts_fmt || row.ts || '';
+    const label = row.label  || row.tag || '';
+    const val   = toOneDecimal(row.value);
+    const unit  = row.unit || '';
+    return `<tr>
+      <td>${ts}</td>
+      <td>${label}</td>
+      <td>${val}</td>
+      <td>${unit}</td>
+    </tr>`;
+  }).join('');
 }
 
-// Events
 qs('loadBtn').addEventListener('click', (e) => { e.preventDefault(); loadTable(); });
-qs('tag').addEventListener('change', loadTable);
-qs('cal').addEventListener('change', loadTable);
+qs('cal').addEventListener('change', () => { toggleCustom(); });
 
-// first paint
+toggleCustom(); // on first paint
 loadTable();
 </script>
 {% endblock %}
-
