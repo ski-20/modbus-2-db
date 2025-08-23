@@ -139,9 +139,16 @@ def status_page():
     if s.get("last_flush_epoch") is not None:
         s["last_flush_epoch_local"] = fmt_local_epoch(s.get("last_flush_epoch"))
 
-    # Use chunk root + new cap key
-    storage = get_storage_status(DB_ROOT, RETENTION.get("total_cap_mb", 512))
-    return render_template("status.html", title="Status", s=s, storage=storage)
+    # Use chunk root + total cap (MB), and pass per-family caps too
+    total_cap_mb = RETENTION.get("total_cap_mb", 0)
+    storage = get_storage_status(DB_ROOT, total_cap_mb)
+    family_caps = RETENTION.get("caps", {})  # e.g. {"conditional":7000, ...}
+
+    return render_template("status.html",
+                           title="Status",
+                           s=s,
+                           storage=storage,
+                           family_caps=family_caps)
 
 @ui_bp.route("/setpoints", methods=["GET", "POST"])
 def setpoints():

@@ -1,30 +1,68 @@
 {% extends "base.html" %}
 {% block content %}
+
+<h5 class="mb-2">Runtime</h5>
 <table class="table table-sm table-striped">
   <tbody>
     <tr><td>connected</td><td>{{ s.connected|default('') }}</td></tr>
     <tr><td>last_read_ok</td><td>{{ s.last_read_ok|default('') }}</td></tr>
     <tr><td>consecutive_errors</td><td>{{ s.consecutive_errors|default('') }}</td></tr>
-    <tr><td>last_read_epoch</td><td>{{ s.last_read_epoch|default('') }}</td></tr>
     <tr><td>last_read_local</td><td>{{ s.last_read_epoch_local|default('') }}</td></tr>
-    <tr><td>last_flush_epoch</td><td>{{ s.last_flush_epoch|default('') }}</td></tr>
     <tr><td>last_flush_local</td><td>{{ s.last_flush_epoch_local|default('') }}</td></tr>
     <tr><td>rows_written_last_flush</td><td>{{ s.rows_written_last_flush|default('') }}</td></tr>
   </tbody>
 </table>
-{% if storage %}
-<hr>
 
-<h5>Storage</h5>
+<h5 class="mt-4 mb-2">Storage (chunks)</h5>
 <table class="table table-sm table-striped">
   <tbody>
-    <tr><td>Used / Cap (MB)</td><td>{{ storage.total_mb }}/{{ storage.cap_mb }} ({{ storage.pct_of_cap }}%)</td></tr>
-    <tr><td>DB / WAL / SHM (MB)</td><td>{{ storage.db_mb }} / {{ storage.wal_mb }} / {{ storage.shm_mb }}</td></tr>
-    <tr><td>Auto-vacuum / Journal</td><td>{{ storage.auto_vacuum_label }} / {{ storage.journal_mode }}</td></tr>
-    <tr><td>Pages / Free pages</td><td>{{ storage.page_count }} / {{ storage.freelist_count }}</td></tr>
-    <tr><td>Rows (logs)</td><td>{{ storage.row_count }}</td></tr>
-    <tr><td>Oldest / Newest</td><td>{{ storage.min_ts or '—' }} / {{ storage.max_ts or '—' }}</td></tr>
+    <tr>
+      <td>Total used</td>
+      <td>{{ '%.1f'|format(storage.total_mb) }} MB</td>
+    </tr>
+    <tr>
+      <td>Total cap</td>
+      <td>{{ '%.1f'|format(storage.cap_mb) }} MB</td>
+    </tr>
+    <tr>
+      <td>Usage</td>
+      <td>{{ storage.pct_of_cap }}%</td>
+    </tr>
+    <tr>
+      <td>Total files</td>
+      <td>{{ storage.files_total }}</td>
+    </tr>
   </tbody>
 </table>
-{% endif %}
+
+<h6 class="mt-3 mb-2">By family</h6>
+<table class="table table-sm table-striped">
+  <thead>
+    <tr>
+      <th>Family</th>
+      <th>Used (MB)</th>
+      <th>Cap (MB)</th>
+      <th>% of Cap</th>
+      <th>Files</th>
+    </tr>
+  </thead>
+  <tbody>
+    {% for name, fam in storage.families.items()|sort %}
+      {% set cap_mb = family_caps.get(name) %}
+      {% set used_mb = fam.mb or 0.0 %}
+      {% set pct = (used_mb * 100.0 / cap_mb) if cap_mb else None %}
+      <tr>
+        <td>{{ name }}</td>
+        <td>{{ '%.1f'|format(used_mb) }}</td>
+        <td>{{ cap_mb if cap_mb else '-' }}</td>
+        <td>{% if pct is not none %}{{ '%.1f'|format(pct) }}%{% else %}-{% endif %}</td>
+        <td>{{ fam.files or 0 }}</td>
+      </tr>
+    {% else %}
+      <tr><td colspan="5">No families found under {{ storage.root }}</td></tr>
+    {% endfor %}
+  </tbody>
+</table>
+
+<p class="mt-3">JSON: <a href="/status">/status</a></p>
 {% endblock %}
