@@ -1,6 +1,7 @@
 # chunks.py
 import os, glob, sqlite3, time
 from typing import List, Tuple, Iterable, Dict, Optional, Any, Set
+from datetime import datetime, timezone
 import sqlite3
 
 # Families by logger mode
@@ -172,7 +173,7 @@ def query_logs(db_root: str, tag: Optional[str], cal: str, limit: int):
     import datetime as _dt
     fams = [family_for_tag(tag)] if tag else [F_CONTINUOUS, F_CONDITIONAL, F_ONCHANGE]
 
-    now = _dt.datetime.utcnow()
+    now = datetime.now(timezone.utc)
     start = None
     if   cal == "today":      start = now.replace(hour=0,minute=0,second=0,microsecond=0)
     elif cal == "yesterday":  start = (now - _dt.timedelta(days=1)).replace(hour=0,minute=0,second=0,microsecond=0)

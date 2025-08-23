@@ -12,16 +12,18 @@ WORD_ORDER = "LH"   # "HL" = HI word first; "LH" = LO word first
 LOCAL_TZ = "America/New_York"   # e.g., "America/New_York", "UTC", etc.
 WEEK_START = 0 # 0=mon, 6=sun
 
-# file management
+# file management (raw-only)
 RETENTION = {
-    "total_cap_mb": 10,     # global hard cap (test)
-    "chunk_max_mb": 1,      # rotate chunk around ~1 MB (test)
+    "total_cap_mb": 20,   # 10 GB hard cap
+    "chunk_max_mb": 2,      # ~64 MB per chunk is a nice balance
 
-    # Optional per-family caps:
-    # "caps": {"continuous": 7, "conditional": 2, "onchange": 1},
+    # Split the space across families (optional but recommended)
+    "caps": {
+        "conditional": 14,  # pumps’ bursty data
+        "continuous":  4,  # Wet Well Level
+        "onchange":     2,  # faults/edges/etc.
+    },
 
-    # Optional family overrides (tag -> family):
-    # "family_overrides": {"SomeNoisyConditionalTag": "continuous"}
+    # Optional overrides if a tag should live in a different family:
+    # "family_overrides": {"SomeNoisyConditionalTag": "continuous"},
 }
-
-
