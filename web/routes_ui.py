@@ -55,12 +55,26 @@ def _words_to_float(hi: int, lo: int) -> float:
         hi, lo = lo, hi
     return struct.unpack(">f", struct.pack(">HH", int(hi), int(lo)))[0]
 
+def _mb_read_holding(cli, address: int, count: int):
+    """Compat wrapper for pymodbus 2.x (unit=) vs 3.x (slave=)."""
+    try:
+        return cli.read_holding_registers(address=address, count=count, unit=SLAVE_ID)
+    except TypeError:
+        return cli.read_holding_registers(address=address, count=count, slave=SLAVE_ID)
+
+def _mb_write_register(cli, address: int, value: int):
+    try:
+        return cli.write_register(address=address, value=value, unit=SLAVE_ID)
+    except TypeError:
+        return cli.write_register(address=address, value=value, slave=SLAVE_ID)
+
+def _mb_write_registers(cli, address: int, values):
+    try:
+        return cli.write_registers(address=address, values=values, unit=SLAVE_ID)
+    except TypeError:
+        return cli.write_registers(address=address, values=values, slave=SLAVE_ID)
+
 def _read_setpoints_values(cli, sps):
-    """
-    Read current values for each setpoint in sps.
-    sps items: {'name','mw','dtype' ...}
-    Returns (values_dict, error_msg)
-    """
     values = {}
     for sp in sps:
         name = sp.get("name")
@@ -68,12 +82,12 @@ def _read_setpoints_values(cli, sps):
         dtype = (sp.get("dtype") or "INT16").upper()
         try:
             if dtype == "INT16":
-                rr = cli.read_holding_registers(address=addr, count=1, unit=SLAVE_ID)
+                rr = _mb_read_holding(cli, address=addr, count=1)
                 if rr is None or (hasattr(rr, "isError") and rr.isError()):
                     return values, f"Read error @%MW{addr}: {getattr(rr,'exception_code', rr)}"
                 values[name] = int(rr.registers[0])
             else:
-                rr = cli.read_holding_registers(address=addr, count=2, unit=SLAVE_ID)
+                rr = _mb_read_holding(cli, address=addr, count=2)
                 if rr is None or (hasattr(rr, "isError") and rr.isError()):
                     return values, f"Read error @%MW{addr}..{addr+1}: {getattr(rr,'exception_code', rr)}"
                 hi, lo = rr.registers[0], rr.registers[1]
@@ -147,11 +161,10 @@ def setpoints():
                 addr = int(sp["mw"])
                 dtype = (sp.get("dtype") or "INT16").upper()
                 if dtype == "INT16":
-                    rq = cli.write_register(address=addr, value=int(fval), unit=SLAVE_ID)
+                    rq = _mb_write_register(cli, address=addr, value=int(fval))
                 else:
                     hi, lo = _float_to_words(fval)
-                    rq = cli.write_registers(address=addr, values=[hi, lo], unit=SLAVE_ID)
-                # check error
+                    rq = _mb_write_registers(cli, address=addr, values=[hi, lo])
                 if hasattr(rq, "isError") and rq.isError():
                     raise RuntimeError(f"Modbus write error: {rq}")
                 return True
