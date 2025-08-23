@@ -1,15 +1,30 @@
 # API routes: /api/logs, /api/download.csv
 
 from flask import Blueprint, request, jsonify, Response, stream_with_context
-from config import DB_ROOT, RETENTION, _LOCAL_TZ
+from config import DB_ROOT, RETENTION, LOCAL_TZ
 from tags import TAGS
 from chunks import query_logs, init_family_router
 import csv
 import io
 from datetime import datetime, timezone, timedelta
 
-from zoneinfo import ZoneInfo
-_LOCAL_TZ = ZoneInfo(LOCAL_TZ)  # build once from config
+# Optional: week start (0=Mon..6=Sun)
+try:
+    from config import WEEK_START
+except Exception:
+    WEEK_START = 0
+
+# Build a tzinfo from LOCAL_TZ in config
+try:
+    from zoneinfo import ZoneInfo  # Python 3.9+
+except Exception:
+    try:
+        from backports.zoneinfo import ZoneInfo  # Python 3.8: pip install backports.zoneinfo
+    except Exception:
+        ZoneInfo = None
+
+_LOCAL_TZ = ZoneInfo(LOCAL_TZ) if ZoneInfo else None
+
 
 # Route interval/conditional/on_change -> families
 init_family_router(TAGS, RETENTION.get("family_overrides"))

@@ -10,6 +10,7 @@ WORD_ORDER = "LH"   # "HL" = HI word first; "LH" = LO word first
 
 # Timezone for web display. Logger/db always uses UTC
 LOCAL_TZ = "America/New_York"   # e.g., "America/New_York", "UTC", etc.
+WEEK_START = 0 # 0=mon, 6=sun
 
 # file management
 RETENTION = {
