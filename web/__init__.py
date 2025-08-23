@@ -7,6 +7,7 @@ def create_app():
     app = Flask(__name__, static_folder="static", template_folder="templates")
 
     from config import LOCAL_TZ
+    app.jinja_env.globals.update(CONFIG_LOCAL_TZ=LOCAL_TZ)
 
     @app.context_processor
     def inject_local_tz():

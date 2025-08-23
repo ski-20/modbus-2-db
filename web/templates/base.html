@@ -26,7 +26,7 @@
   {% block scripts %}{% endblock %}
 
   <script>
-  window.APP_TZ = "{{ CONFIG_LOCAL_TZ }}";
+    window.APP_TZ = "{{ CONFIG_LOCAL_TZ or 'UTC' }}";
   </script>
 
 </body>

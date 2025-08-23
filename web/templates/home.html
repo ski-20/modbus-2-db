@@ -2,9 +2,9 @@
 {% block content %}
 
 <form id="f" class="row g-2 mb-3">
-  <div class="col-sm-4">
+  <div class="col-12 col-lg-4">
     <label class="form-label">Tag</label>
-    <select class="form-select" name="tag" id="tag">
+    <select class="form-select" id="tag">
       <option value="">(all)</option>
       {% for r in tags %}
         <option value="{{ r.tag }}" {% if r.tag == selections.tag %}selected{% endif %}>
@@ -14,9 +14,9 @@
     </select>
   </div>
 
-  <div class="col-sm-2">
+  <div class="col-6 col-lg-2">
     <label class="form-label">Date Range</label>
-    <select class="form-select" name="cal" id="cal">
+    <select class="form-select" id="cal">
       <option value="all"       {% if selections.cal == 'all' %}selected{% endif %}>(all)</option>
       <option value="today"     {% if selections.cal == 'today' %}selected{% endif %}>Today</option>
       <option value="yesterday" {% if selections.cal == 'yesterday' %}selected{% endif %}>Yesterday</option>
@@ -27,29 +27,34 @@
     </select>
   </div>
 
-  <div class="col-sm-4" id="customRange" style="display:none">
+  <!-- Full width on small screens; shows only when 'custom' -->
+  <div class="col-12" id="customRange" style="display:none">
     <label class="form-label">Custom (Local time)</label>
-    <div class="d-flex gap-2">
-      <input class="form-control" type="datetime-local" id="start">
-      <span class="align-self-center">to</span>
-      <input class="form-control" type="datetime-local" id="end">
+    <div class="row g-2">
+      <div class="col-12 col-md-6">
+        <input class="form-control" type="datetime-local" id="start">
+      </div>
+      <div class="col-12 col-md-6">
+        <input class="form-control" type="datetime-local" id="end">
+      </div>
     </div>
   </div>
 
-  <div class="col-sm-2">
+  <div class="col-6 col-lg-2">
     <label class="form-label">Limit</label>
-    <input class="form-control" name="limit" id="limit" value="{{ selections.limit }}">
+    <input class="form-control" id="limit" value="{{ selections.limit }}">
   </div>
 
-  <div class="col-sm-2">
+  <div class="col-6 col-lg-2">
     <label class="form-label">Bucket (sec, optional)</label>
-    <input class="form-control" name="bucket_s" id="bucket_s" value="{{ selections.bucket_s }}">
+    <input class="form-control" id="bucket_s" value="{{ selections.bucket_s }}">
   </div>
 
-  <div class="col-sm-2 align-self-end">
+  <div class="col-6 col-lg-2 align-self-end">
     <button id="loadBtn" class="btn btn-primary w-100" type="button">Load</button>
   </div>
 </form>
+
 
 <div class="mb-2">
   <a id="dl" class="btn btn-outline-secondary btn-sm" href="#">Download CSV</a>
@@ -73,90 +78,98 @@
 
 {% block scripts %}
 <script>
-function qs(id){ return document.getElementById(id); }
+(function () {
+  function qs(id){ return document.getElementById(id); }
 
-function toggleCustom(){
-  const on = qs('cal').value === 'custom';
-  qs('customRange').style.display = on ? '' : 'none';
-}
-
-function buildParams(){
-  const p = new URLSearchParams();
-  const tag    = qs('tag').value.trim();
-  const cal    = qs('cal').value || 'all';
-  const limit  = qs('limit').value || '500';
-  const bucket = qs('bucket_s').value || '';
-  if (tag) p.set('tag', tag);
-  p.set('cal', cal);
-  p.set('limit', limit);
-  if (bucket) p.set('bucket_s', bucket);
-
-  if (cal === 'custom') {
-    const start = qs('start').value; // "YYYY-MM-DDTHH:MM" local
-    const end   = qs('end').value;
-    if (start) p.set('start', start);
-    if (end)   p.set('end', end);
-  }
-  return p;
-}
-
-function toOneDecimal(val) {
-  if (val === null || val === undefined) return '';
-  const n = (typeof val === 'number') ? val : Number(val);
-  if (Number.isFinite(n)) return n.toFixed(1);
-  return String(val);
-}
-
-async function loadTable() {
-  const p = buildParams();
-  qs('dl').href = '/api/download.csv?' + p.toString();
-
-  let resp;
-  try {
-    resp = await fetch('/api/logs?' + p.toString(), { cache: 'no-store' });
-  } catch (e) {
-    console.error('Fetch error:', e);
-    alert('Network error calling /api/logs.');
-    return;
-  }
-  if (!resp.ok) {
-    const txt = await resp.text();
-    console.error('API error:', resp.status, txt);
-    alert('API error ' + resp.status + ': ' + txt);
-    return;
-  }
-  let payload;
-  try {
-    payload = await resp.json();
-  } catch (e) {
-    console.error('JSON parse error:', e);
-    alert('Could not parse /api/logs JSON.');
-    return;
+  // Format a UTC ISO string in the configured TZ (falls back to browser TZ)
+  function toLocalTZ(ts){
+    if (!ts) return '';
+    // your API returns UTC-naive or UTC; if naive, treat it as UTC
+    const d = new Date(ts.endsWith('Z') ? ts : ts + 'Z');
+    const tz = (window.APP_TZ && String(window.APP_TZ)) ||
+               (Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC');
+    try {
+      return new Intl.DateTimeFormat(undefined, {
+        timeZone: tz,
+        year: 'numeric', month: '2-digit', day: '2-digit',
+        hour: '2-digit', minute: '2-digit', second: '2-digit'
+      }).format(d);
+    } catch (e) {
+      return d.toLocaleString(); // safe fallback
+    }
   }
 
-  const rows = Array.isArray(payload) ? payload
-              : (Array.isArray(payload.rows) ? payload.rows
-              : (Array.isArray(payload.data) ? payload.data : []));
+  function toggleCustom(){
+    qs('customRange').style.display = (qs('cal').value === 'custom') ? '' : 'none';
+  }
 
-  const tbody = document.querySelector('#tbl tbody');
-  tbody.innerHTML = rows.map(row => {
-    const ts    = row.ts_fmt || row.ts || '';
-    const label = row.label  || row.tag || '';
-    const val   = toOneDecimal(row.value);
-    const unit  = row.unit || '';
-    return `<tr>
-      <td>${ts}</td>
-      <td>${label}</td>
-      <td>${val}</td>
-      <td>${unit}</td>
-    </tr>`;
-  }).join('');
-}
+  function buildParams(){
+    const p = new URLSearchParams();
+    const tag    = qs('tag').value.trim();
+    const cal    = qs('cal').value || 'all';
+    const limit  = qs('limit').value || '500';
+    const bucket = qs('bucket_s').value || '';
+    if (tag) p.set('tag', tag);
+    p.set('cal', cal);
+    p.set('limit', limit);
+    if (bucket) p.set('bucket_s', bucket);
+    if (cal === 'custom') {
+      const s = qs('start').value, e = qs('end').value;
+      if (s) p.set('start', s);
+      if (e) p.set('end', e);
+    }
+    return p;
+  }
 
-qs('loadBtn').addEventListener('click', (e) => { e.preventDefault(); loadTable(); });
-qs('cal').addEventListener('change', () => { toggleCustom(); });
+  function toOneDecimal(val){
+    if (val === null || val === undefined) return '';
+    const n = (typeof val === 'number') ? val : Number(val);
+    return Number.isFinite(n) ? n.toFixed(1) : String(val);
+  }
 
-toggleCustom(); // on first paint
-loadTable();
+  async function loadTable(){
+    const p = buildParams();
+    qs('dl').href = '/api/download.csv?' + p.toString();
+
+    let resp;
+    try { resp = await fetch('/api/logs?' + p.toString(), { cache:'no-store' }); }
+    catch (e) { console.error(e); alert('Network error calling /api/logs.'); return; }
+
+    if (!resp.ok) {
+      const txt = await resp.text();
+      console.error('API error', resp.status, txt);
+      alert('API error ' + resp.status + ': ' + txt);
+      return;
+    }
+
+    let payload;
+    try { payload = await resp.json(); }
+    catch (e) { console.error(e); alert('Could not parse /api/logs JSON.'); return; }
+
+    const rows = Array.isArray(payload) ? payload
+                : (Array.isArray(payload.rows) ? payload.rows
+                : (Array.isArray(payload.data) ? payload.data : []));
+
+    const tbody = document.querySelector('#tbl tbody');
+    tbody.innerHTML = rows.map(row => {
+      const ts    = row.ts || '';
+      const label = row.label || row.tag || '';
+      const val   = toOneDecimal(row.value);
+      const unit  = row.unit || '';
+      return `<tr>
+        <td>${toLocalTZ(ts)}</td>
+        <td>${label}</td>
+        <td>${val}</td>
+        <td>${unit}</td>
+      </tr>`;
+    }).join('');
+  }
+
+  qs('loadBtn').addEventListener('click', (e) => { e.preventDefault(); loadTable(); });
+  qs('cal').addEventListener('change', toggleCustom);
+
+  toggleCustom();
+  loadTable();
+})();
 </script>
 {% endblock %}
