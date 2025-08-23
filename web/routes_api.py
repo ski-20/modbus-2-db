@@ -3,7 +3,7 @@
 from flask import Blueprint, request, jsonify, Response, stream_with_context
 from config import DB_ROOT, RETENTION, LOCAL_TZ
 from tags import TAGS
-from chunks import query_logs, init_family_router
+from chunks import query_logs, init_family_router, meta_path
 import csv
 import io
 from datetime import datetime, timezone, timedelta
@@ -25,13 +25,33 @@ except Exception:
 
 _LOCAL_TZ = ZoneInfo(LOCAL_TZ) if ZoneInfo else None
 
-
 # Route interval/conditional/on_change -> families
 init_family_router(TAGS, RETENTION.get("family_overrides"))
 
 api_bp = Blueprint("api", __name__)
 
 # ---------- helpers ----------
+
+_TAGMAP_CACHE = {"mtime": 0, "map": {}}
+
+def _tag_map():
+    """Return {tag: {'label': str, 'unit': str}} from meta.db, cached by file mtime."""
+    meta = meta_path(DB_ROOT)
+    mtime = os.path.getmtime(meta) if os.path.exists(meta) else 0
+    if mtime != _TAGMAP_CACHE["mtime"]:
+        d = {}
+        if mtime:
+            con = sqlite3.connect(meta, timeout=10)
+            cur = con.cursor()
+            try:
+                cur.execute("SELECT tag, label, unit FROM tag_meta")
+                for t, lbl, unit in cur.fetchall():
+                    d[str(t)] = {"label": lbl or str(t), "unit": unit or ""}
+            finally:
+                cur.close(); con.close()
+        _TAGMAP_CACHE["mtime"] = mtime
+        _TAGMAP_CACHE["map"] = d
+    return _TAGMAP_CACHE["map"]
 
 def _parse_int(val, default):
     try:
@@ -96,8 +116,15 @@ def api_logs():
         rows = _maybe_bucket(rows, bucket_s)
         rows = rows[:limit]
 
+    tmap = _tag_map()
     data = [
-        {"ts": ts, "tag": tg, "value": val, "unit": unit}
+        {
+            "ts": ts,
+            "tag": tg,
+            "label": (tmap.get(tg, {}).get("label") or tg),
+            "value": val,
+            "unit": (unit if unit else tmap.get(tg, {}).get("unit", "")),
+        }
         for (ts, tg, val, unit) in rows
     ]
     return jsonify(data)
