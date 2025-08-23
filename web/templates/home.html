@@ -78,7 +78,7 @@
 (function () {
   const qs = (id) => document.getElementById(id);
 
-  // Format a UTC ISO string in configured TZ (falls back to browser TZ)
+  // Format a UTC ISO string in configured TZ for the table
   function toLocalTZ(ts){
     if (!ts) return '';
     const d = new Date(ts.endsWith('Z') ? ts : ts + 'Z');
@@ -93,15 +93,24 @@
     } catch { return d.toLocaleString(); }
   }
 
-  // Set sensible defaults for custom range (last 1 hour) if fields are blank
+  // Build "YYYY-MM-DDTHH:MM" for an *instant* shown in a specific IANA TZ
+  function fmtInputYMDHMInTZ(instant, tz){
+    const parts = new Intl.DateTimeFormat('en-CA', {
+      timeZone: tz, hour12: false,
+      year: 'numeric', month: '2-digit', day: '2-digit',
+      hour: '2-digit', minute: '2-digit'
+    }).formatToParts(instant).reduce((a,p)=> (a[p.type]=p.value, a), {});
+    return `${parts.year}-${parts.month}-${parts.day}T${parts.hour}:${parts.minute}`;
+  }
+
+  // Defaults for custom range: last 1 hour in APP_TZ
   function ensureCustomDefaults(){
-    const start = qs('start'), end = qs('end');
-    const pad = (n) => String(n).padStart(2,'0');
-    const toInput = (dt) =>
-      `${dt.getFullYear()}-${pad(dt.getMonth()+1)}-${pad(dt.getDate())}T${pad(dt.getHours())}:${pad(dt.getMinutes())}`;
-    const now = new Date();
-    if (!end.value) end.value = toInput(now);
-    if (!start.value) start.value = toInput(new Date(now.getTime() - 60*60*1000));
+    const tz = (window.APP_TZ && String(window.APP_TZ)) || 'UTC';
+    const now = new Date();                          // current instant
+    const oneHourAgo = new Date(now.getTime() - 3600_000);
+    const endEl = qs('end'), startEl = qs('start');
+    if (!endEl.value)   endEl.value   = fmtInputYMDHMInTZ(now, tz);
+    if (!startEl.value) startEl.value = fmtInputYMDHMInTZ(oneHourAgo, tz);
   }
 
   function toggleCustom(){
@@ -122,7 +131,7 @@
     if (bucket) p.set('bucket_s', bucket);
     if (cal === 'custom') {
       const s = qs('start').value, e = qs('end').value;
-      if (s) p.set('start', s);
+      if (s) p.set('start', s);   // interpreted server-side in LOCAL_TZ
       if (e) p.set('end', e);
     }
     return p;
