@@ -1,36 +1,36 @@
 #!/usr/bin/env python3
-import time, struct, sqlite3, threading, random, os, shutil
+import time, struct, sqlite3, threading, random
 from datetime import datetime, timezone
 import logging
 
 # ------------------ CONFIG ------------------
 # Prefer config.py if you have it
 try:
-    from config import DB, PLC_IP, PLC_PORT, WORD_ORDER, RETENTION
+    from config import DB_ROOT, PLC_IP, PLC_PORT, WORD_ORDER, RETENTION
 except Exception:
-    DB = "/home/ele/plc_logger/plc.db"
+    DB_ROOT = "/home/ele/plc_logger/data"
     PLC_IP, PLC_PORT = "10.0.0.1", 502
-    WORD_ORDER = "LH"   # "HL" = hi-word first in %MWn, %MWn+1; use "LH" if low-word first
-    RETENTION = {}  # fall back to builtin defaults
+    WORD_ORDER = "LH"  # "HL" = hi-word first in %MWn, %MWn+1; use "LH" if low-word first
+    RETENTION = {"total_cap_mb": 10, "chunk_max_mb": 1}
 
-# retention/cleanup
-from retention import RetentionConfig, enforce_quota_periodic
-
-ret_cfg = RetentionConfig(
-    db_path=DB,
-    max_db_mb=RETENTION.get("max_db_mb", 512),
-    raw_keep_days=RETENTION.get("raw_keep_days", 14),
-    delete_batch=RETENTION.get("delete_batch", 10_000),
-    enforce_every_s=RETENTION.get("enforce_every_s", 300),
-    incremental_vacuum_pages=RETENTION.get("incremental_vacuum_pages", 2000),
-    primary_purge_tags=RETENTION.get("primary_purge_tags", ["SYS_WetWellLevel"]),
+# chunked storage (families by tag mode)
+from chunks import (
+    ensure_layout,
+    meta_path,
+    write_rows_chunked,
+    enforce_chunk_quota,
+    init_family_router,
+    query_logs,
 )
 
-# default absolute deadband for on change tag logging, should never really need to change
+# default absolute deadband for on_change logging
 DEFAULT_DB_ABS = 0.05
 
 # Tags + cadences come from tags.py
 from tags import TAGS, FAST_SEC, SAMPLE_SEC
+
+# Build routing once (families derived from tag "mode", with optional overrides)
+init_family_router(TAGS, RETENTION.get("family_overrides"))
 
 LOG_NAME = "modbus_logger"
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
@@ -51,47 +51,22 @@ def get_client():
             _client.connect()
         return _client
 
-# ------------------ DB helpers ------------------
+# ------------------ DB helpers (meta.db only) ------------------
+META_DB = meta_path(DB_ROOT)
+
 def ensure_schema():
-    con = sqlite3.connect(DB)
+    """Ensure directory layout and meta.db schema (state, tag_meta)."""
+    ensure_layout(DB_ROOT)
+    con = sqlite3.connect(META_DB, timeout=30)
     cur = con.cursor()
     cur.execute("PRAGMA journal_mode=WAL;")
     cur.execute("PRAGMA busy_timeout=2000;")
-
-    # Pragmas first (before any schema)
-    cur.execute("PRAGMA busy_timeout=2000;")
-    cur.execute("PRAGMA journal_mode=WAL;")
-    cur.execute("PRAGMA auto_vacuum=INCREMENTAL")   # <-- set desired mode early
-    con.commit()
-
-    # Inspect current state before doing anything
-    cur.execute("PRAGMA auto_vacuum")
-    av_before = cur.fetchone()[0]  # 0 NONE, 1 FULL, 2 INCREMENTAL
-    cur.execute("SELECT COUNT(*) FROM sqlite_master WHERE type='table'")
-    table_count = cur.fetchone()[0]
-    fresh_db = (table_count == 0)
-
-    # On a brand-new DB (no tables), set auto_vacuum BEFORE any CREATE TABLE.
-    if fresh_db and av_before != 2:
-        cur.execute("PRAGMA auto_vacuum=INCREMENTAL")
-        con.commit()
-
-    cur.execute("""
-      CREATE TABLE IF NOT EXISTS logs (
-        ts   TEXT NOT NULL,
-        tag  TEXT NOT NULL,
-        value REAL,
-        unit TEXT
-      )
-    """)
-    cur.execute("CREATE INDEX IF NOT EXISTS idx_logs_tag_ts ON logs(tag, ts)")
     cur.execute("""
       CREATE TABLE IF NOT EXISTS state (
         key TEXT PRIMARY KEY,
         value REAL
       )
     """)
-    # meta for labels/units/addresses
     cur.execute("""
       CREATE TABLE IF NOT EXISTS tag_meta (
         tag    TEXT PRIMARY KEY,
@@ -101,32 +76,13 @@ def ensure_schema():
         dtype  TEXT
       )
     """)
-    con.commit()
-
-    # Verify; if not persisted, do a one-time conversion (fast on fresh DB)
-    cur.execute("PRAGMA auto_vacuum")
-    av = cur.fetchone()[0]  # 0 NONE, 1 FULL, 2 INCREMENTAL
-    if av != 2:
-        # One-time rewrite so header stores autovacuum; very fast on new DB
-        cur.execute("PRAGMA auto_vacuum=INCREMENTAL")
-        con.commit()
-        cur.execute("VACUUM")
-        con.commit()
-        cur.execute("PRAGMA auto_vacuum")
-        av = cur.fetchone()[0]
-
-    # Log final modes so you can confirm in logs/status
-    cur.execute("PRAGMA journal_mode")
-    jm = cur.fetchone()[0]
-    log.info("SQLite modes: auto_vacuum=%s (2=INCREMENTAL), journal_mode=%s", av, jm)
-    
-    cur.close(); con.close()
+    con.commit(); con.close()
 
 def upsert_tag_meta_from_tags():
-    """Logger is the sole owner of tag_meta contents."""
+    """Logger is the sole owner of tag_meta contents (in meta.db)."""
     rows = [(t["name"], t.get("label", t["name"]), t.get("unit",""), int(t["mw"]),
              (t.get("dtype") or t.get("type","INT16")).upper()) for t in TAGS]
-    con = sqlite3.connect(DB, timeout=30)
+    con = sqlite3.connect(META_DB, timeout=30)
     cur = con.cursor()
     cur.executemany("""
         INSERT INTO tag_meta(tag, label, unit, mw, dtype)
@@ -141,7 +97,7 @@ def upsert_tag_meta_from_tags():
 
 def set_state_many(pairs):
     if not pairs: return
-    con = sqlite3.connect(DB, timeout=30)
+    con = sqlite3.connect(META_DB, timeout=30)
     cur = con.cursor()
     cur.executemany("""
         INSERT INTO state(key, value) VALUES(?,?)
@@ -150,71 +106,38 @@ def set_state_many(pairs):
     con.commit(); con.close()
 
 def write_rows(rows):
+    """Write log rows to chunk files by family (continuous / conditional / onchange)."""
     if not rows: return
-    con = sqlite3.connect(DB, timeout=30)
-    cur = con.cursor()
-    cur.execute("PRAGMA busy_timeout=2000;")
-    cur.executemany("INSERT INTO logs (ts, tag, value, unit) VALUES (?,?,?,?)", rows)
-    con.commit(); con.close()
+    write_rows_chunked(DB_ROOT, RETENTION.get("chunk_max_mb", 1), rows)
 
 def _iso_to_epoch_utc(ts_text: str) -> float:
-    """
-    Convert your stored ISO UTC string to epoch seconds.
-    Assumes your code stores UTC via datetime.utcnow().isoformat().
-    """
+    """Convert ISO string (UTC) to epoch seconds."""
     try:
         dt = datetime.fromisoformat(ts_text)
     except Exception:
         return 0.0
-    # Treat naive dt as UTC (you use datetime.utcnow())
     if dt.tzinfo is None:
         dt = dt.replace(tzinfo=timezone.utc)
     return dt.timestamp()
 
-def hydrate_baseline_from_db():
+def hydrate_baseline_from_chunks():
     """
-    Seed last_value and last_logged from the latest DB row per tag.
+    Seed last_value and last_logged from newest row per tag (across chunks).
     Prevents 'first scan after restart' logging for on_change/conditional.
     """
-    con = sqlite3.connect(DB, timeout=30)
-    cur = con.cursor()
-    try:
-        cur.execute("""
-            SELECT l.tag, l.value, l.ts
-            FROM logs AS l
-            JOIN (
-              SELECT tag, MAX(ts) AS ts
-              FROM logs
-              GROUP BY tag
-            ) x ON x.tag = l.tag AND x.ts = l.ts
-        """)
-        rows = cur.fetchall()
-    finally:
-        cur.close(); con.close()
-
-    for tag, value, ts_text in rows:
+    for t in TAGS:
+        name = t["name"]
         try:
-            last_value[str(tag)]  = float(value) if value is not None else None
+            rows = query_logs(DB_ROOT, tag=name, cal="all", limit=1)
         except Exception:
-            last_value[str(tag)]  = None
-        last_logged[str(tag)] = _iso_to_epoch_utc(ts_text) or 0.0
-
-def _filesize_sum(path: str) -> int:
-    total = 0
-    for p in (path, f"{path}-wal", f"{path}-shm"):
-        try: total += os.path.getsize(p)
-        except OSError: pass
-    return total
-
-def init_storage_on_restart():
-    con = sqlite3.connect(DB, timeout=30)
-    cur = con.cursor()
-    try:
-        cur.execute("PRAGMA wal_checkpoint(TRUNCATE)")  # shrink WAL from last run
-        cur.execute("PRAGMA incremental_vacuum(5000)")  # reclaim some free pages
-        con.commit()
-    finally:
-        cur.close(); con.close()
+            rows = []
+        if rows:
+            ts, tag, val, _unit = rows[0]
+            try:
+                last_value[name] = float(val) if val is not None else None
+            except Exception:
+                last_value[name] = None
+            last_logged[name] = _iso_to_epoch_utc(ts) or 0.0
 
 # ------------------ Modbus decode helpers ------------------
 def to_int16(w):   return w - 65536 if w >= 32768 else w
@@ -253,14 +176,14 @@ def decode_from_window(words, win_start_mw, tag):
     idx = tag["mw"] - win_start_mw
     if idx < 0 or idx >= len(words): return None
     dtype = (tag.get("dtype") or tag.get("type","INT16")).upper()
-    if dtype == "INT16":   v = float(to_int16(words[idx]))
+    if dtype == "INT16":    v = float(to_int16(words[idx]))
     elif dtype == "UINT16": v = float(to_uint16(words[idx]))
     elif dtype in ("INT32", "UINT32", "FLOAT32"):
         if idx+1 >= len(words): return None
         hi, lo = words[idx], words[idx+1]
-        if dtype == "INT32":   v = float(to_int32(hi, lo))
+        if dtype == "INT32":    v = float(to_int32(hi, lo))
         elif dtype == "UINT32": v = float(to_uint32(hi, lo))
-        else:                  v = float(to_float32(hi, lo))
+        else:                   v = float(to_float32(hi, lo))
     else:
         raise ValueError(f"Unknown dtype {dtype}")
     return v * float(tag.get("scale", 1.0))
@@ -310,14 +233,10 @@ def main():
     ensure_schema()
     upsert_tag_meta_from_tags()
 
-    # Auto storage hygiene on every restart
-    init_storage_on_restart()
-
     # Hydrate baselines so on_change/conditional don't fire immediately after restart
-    hydrate_baseline_from_db()
+    hydrate_baseline_from_chunks()
 
-    # For any tags with no DB history, seed their last_logged to "now"
-    # so conditional mode won't burst-log on first cycle.
+    # For any tags with no history, seed last_logged to "now" to avoid burst on first cycle.
     seed_now = time.time()
     for t in TAGS:
         name = t["name"]
@@ -414,17 +333,19 @@ def main():
                 pending.clear()
                 last_flush = time.time()
 
-                # keep DB under cap (self-throttled)
+                # Enforce chunk caps (global cap + optional per-family caps)
                 try:
-                    stats = enforce_quota_periodic(ret_cfg)
-                    if not stats.get("skipped"):
-                        log.info("Retention: deleted=%s size %.3fMB→%.3fMB phases=%s",
-                            stats["deleted"],
-                            stats["start_bytes"]/1048576,
-                            stats["end_bytes"]/1048576,
-                            ",".join(stats.get("phase", [])))
+                    fam_caps = RETENTION.get("caps") or {}
+                    s = enforce_chunk_quota(DB_ROOT, RETENTION.get("total_cap_mb", 10), fam_caps)
+                    if s.get("deleted_files"):
+                        log.info(
+                            "Chunk retention: deleted=%s total=%.3fMB families=%s",
+                            ",".join(s["deleted_files"]),
+                            s.get("total_mb", 0.0),
+                            s.get("by_fam", {}),
+                        )
                 except Exception as e:
-                    log.warning("Retention check failed: %s", e)
+                    log.warning("Chunk retention failed: %s", e)
 
             consecutive_errors = 0
             time.sleep(float(SAMPLE_SEC))

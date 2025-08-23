@@ -1,108 +1,117 @@
 # API routes: /api/logs, /api/download.csv
 
-from flask import Blueprint, request, jsonify, make_response
-from .db import db, download_csv, tag_label_map, fmt_local_epoch, query_logs_between
-from datetime import datetime, timedelta, timezone, date
+from flask import Blueprint, request, jsonify, Response, stream_with_context
+from config import DB_ROOT, RETENTION, _LOCAL_TZ
+from tags import TAGS
+from chunks import query_logs, init_family_router
+import csv
+import io
+from datetime import datetime, timezone, timedelta
 
-try:
-    from config import LOCAL_TZ_NAME
-except Exception:
-    LOCAL_TZ_NAME = "America/Chicago"
+from zoneinfo import ZoneInfo
+_LOCAL_TZ = ZoneInfo(LOCAL_TZ)  # build once from config
 
-try:
-    from zoneinfo import ZoneInfo
-    _LOCAL_TZ = ZoneInfo(LOCAL_TZ_NAME)
-except Exception:
-    _LOCAL_TZ = None
-
-# Monday = 0 ... Sunday = 6
-START_OF_WEEK = 0  # change to 6 if you prefer Sunday-start weeks
-
-def _to_utc(dt_local: datetime) -> str:
-    """Take a LOCAL naive datetime and return ISO UTC string."""
-    if _LOCAL_TZ:
-        dt_local = dt_local.replace(tzinfo=_LOCAL_TZ)
-        dt_utc = dt_local.astimezone(timezone.utc)
-    else:
-        # fallback: assume local==UTC
-        dt_utc = dt_local.replace(tzinfo=timezone.utc)
-    return dt_utc.isoformat()
-
-def _bounds_for_calendar(preset: str) -> tuple[str, str]:
-    """
-    Returns (start_iso_utc, end_iso_utc) for calendar presets:
-    today, yesterday, week, month, year
-    """
-    now_utc = datetime.now(timezone.utc)
-    now_local = now_utc.astimezone(_LOCAL_TZ) if _LOCAL_TZ else now_utc
-    today = now_local.date()
-
-    if preset == "today":
-        start_local = datetime(today.year, today.month, today.day, 0, 0, 0)
-        end_local   = now_local.replace(microsecond=0)
-    elif preset == "yesterday":
-        y = today - timedelta(days=1)
-        start_local = datetime(y.year, y.month, y.day, 0, 0, 0)
-        end_local   = datetime(y.year, y.month, y.day, 23, 59, 59)
-    elif preset == "week":
-        # calendar week to date, starting on START_OF_WEEK (Mon=0)
-        delta = (today.weekday() - START_OF_WEEK) % 7
-        week_start = today - timedelta(days=delta)
-        start_local = datetime(week_start.year, week_start.month, week_start.day, 0, 0, 0)
-        end_local   = now_local.replace(microsecond=0)
-    elif preset == "month":
-        # first of this month -> now
-        start_local = datetime(today.year, today.month, 1, 0, 0, 0)
-        end_local   = now_local.replace(microsecond=0)
-    elif preset == "year":
-        # Jan 1 of this year -> now
-        start_local = datetime(today.year, 1, 1, 0, 0, 0)
-        end_local   = now_local.replace(microsecond=0)
-    elif preset == "all":
-        # earliest practical bound; your ts are UTC ISO (naive) so keep it naive too
-        start_local = datetime(1970, 1, 1, 0, 0, 0)
-        end_local   = now_local.replace(microsecond=0)
-    else:
-        # default to "today" if not recognized
-        start_local = datetime(today.year, today.month, today.day, 0, 0, 0)
-        end_local   = now_local.replace(microsecond=0)
-
-    return _to_utc(start_local), _to_utc(end_local)
+# Route interval/conditional/on_change -> families
+init_family_router(TAGS, RETENTION.get("family_overrides"))
 
 api_bp = Blueprint("api", __name__)
+
+# ---------- helpers ----------
+
+def _parse_int(val, default):
+    try:
+        return int(val)
+    except Exception:
+        return default
+
+def _to_iso_utc(dt: datetime) -> str:
+    # Ensure ISO in UTC (logger writes UTC-naive; we normalize to UTC-aware ISO)
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    return dt.astimezone(timezone.utc).isoformat()
+
+def _floor_to_bucket(ts: datetime, secs: int) -> datetime:
+    # treat naive as UTC
+    if ts.tzinfo is None:
+        ts = ts.replace(tzinfo=timezone.utc)
+    epoch = int(ts.timestamp())
+    floored = epoch - (epoch % secs)
+    return datetime.fromtimestamp(floored, tz=timezone.utc)
+
+def _maybe_bucket(rows, bucket_s: int):
+    """
+    rows: list of tuples (ts_iso, tag, value, unit)
+    bucket_s: seconds; returns averaged value per (tag, bucket)
+    """
+    from collections import defaultdict
+    acc = defaultdict(lambda: {"sum": 0.0, "n": 0, "unit": ""})
+    for ts_iso, tag, val, unit in rows:
+        try:
+            dt = datetime.fromisoformat(ts_iso)
+        except Exception:
+            continue
+        bts = _floor_to_bucket(dt, bucket_s)
+        key = (tag, bts)
+        acc[key]["sum"] += float(val) if val is not None else 0.0
+        acc[key]["n"]   += 1
+        acc[key]["unit"] = unit or ""
+    out = []
+    for (tag, bts), v in acc.items():
+        avg = (v["sum"] / v["n"]) if v["n"] else None
+        out.append((_to_iso_utc(bts), tag, avg, v["unit"]))
+    # newest first to match your UI
+    out.sort(key=lambda r: r[0], reverse=True)
+    return out
+
+# ---------- routes ----------
 
 @api_bp.route("/logs")
 def api_logs():
     tag      = (request.args.get("tag") or "").strip() or None
     cal      = (request.args.get("cal") or "all").strip().lower()
-    limit    = int(request.args.get("limit","500") or 500)
-    bucket_s = request.args.get("bucket_s","").strip()
-    bucket_s = int(bucket_s) if bucket_s.isdigit() else None
+    limit    = _parse_int(request.args.get("limit", "500"), 500)
+    bucket_s = request.args.get("bucket_s", "").strip()
+    bucket_s = _parse_int(bucket_s, 0) if bucket_s else 0
 
-    start_iso, end_iso = _bounds_for_calendar(cal)
+    # Pull from chunk storage (newest→oldest, across the right families)
+    fetch_limit = limit if bucket_s == 0 else max(limit * 4, 2000)
+    rows = query_logs(DB_ROOT, tag=tag, cal=cal, limit=fetch_limit)
 
-    rows = query_logs_between(
-        tag=tag, start_iso=start_iso, end_iso=end_iso,
-        limit=limit, bucket_s=bucket_s
-    )
-    return jsonify(rows)
+    if bucket_s > 0:
+        rows = _maybe_bucket(rows, bucket_s)
+        rows = rows[:limit]
+
+    data = [
+        {"ts": ts, "tag": tg, "value": val, "unit": unit}
+        for (ts, tg, val, unit) in rows
+    ]
+    return jsonify(data)
 
 @api_bp.route("/download.csv")
 def api_download_csv():
     tag      = (request.args.get("tag") or "").strip() or None
     cal      = (request.args.get("cal") or "all").strip().lower()
-    limit    = int(request.args.get("limit","100000") or 100000)
-    bucket_s = request.args.get("bucket_s","").strip()
-    bucket_s = int(bucket_s) if bucket_s.isdigit() else None
+    limit    = _parse_int(request.args.get("limit", "100000"), 100000)
+    bucket_s = request.args.get("bucket_s", "").strip()
+    bucket_s = _parse_int(bucket_s, 0) if bucket_s else 0
 
-    start_iso, end_iso = _bounds_for_calendar(cal)
+    fetch_limit = limit if bucket_s == 0 else max(limit * 2, 5000)
+    rows = query_logs(DB_ROOT, tag=tag, cal=cal, limit=fetch_limit)
+    if bucket_s > 0:
+        rows = _maybe_bucket(rows, bucket_s)
+        rows = rows[:limit]
 
-    rows = query_logs_between(
-        tag=tag, start_iso=start_iso, end_iso=end_iso,
-        limit=limit, bucket_s=bucket_s
-    )
-    csv_text = download_csv(rows)
-    resp = make_response(csv_text)
-    resp.headers["Content-Type"] = "text/csv"
-    resp.headers["Content-Disposition"] = "attachment; filename=logs.csv"
-    return resp
+    def generate():
+        buf = io.StringIO()
+        w = csv.writer(buf)
+        w.writerow(["ts", "tag", "value", "unit"])
+        yield buf.getvalue(); buf.seek(0); buf.truncate(0)
+        for ts, tg, val, unit in rows:
+            w.writerow([ts, tg, val, unit])
+            yield buf.getvalue(); buf.seek(0); buf.truncate(0)
+
+    headers = {
+        "Content-Type": "text/csv; charset=utf-8",
+        "Content-Disposition": 'attachment; filename="logs.csv"',
+    }
+    return Response(stream_with_context(generate()), headers=headers)

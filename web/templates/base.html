@@ -24,5 +24,10 @@
 
   </div>
   {% block scripts %}{% endblock %}
+
+  <script>
+  window.APP_TZ = "{{ CONFIG_LOCAL_TZ }}";
+  </script>
+
 </body>
 </html>
