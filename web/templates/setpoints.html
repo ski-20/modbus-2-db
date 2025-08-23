@@ -5,11 +5,14 @@
 <form method="post" class="row g-2 mb-3">
   <div class="col-sm-5">
     <label class="form-label">Name</label>
-    <select class="form-select" name="name">
-      {% for sp in sps %}
-        <option value="{{ sp.name }}">{{ sp.label or labels.get(sp.name, sp.name) }}</option>
-      {% endfor %}
-    </select>
+    <select class="form-select" name="name" id="sp_name">
+    {% for sp in sps %}
+      <option value="{{ sp.name }}"
+        {% if sp.name == selected_name %}selected{% endif %}>
+        {{ labels.get(sp.name, sp.label or sp.name) }}
+      </option>
+    {% endfor %}
+  </select>
   </div>
   <div class="col-sm-3">
     <label class="form-label">Value</label>

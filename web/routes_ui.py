@@ -1,5 +1,5 @@
 # web/routes_ui.py
-from flask import Blueprint, request, render_template, jsonify, make_response
+from flask import Blueprint, request, render_template, jsonify, make_response, redirect, url_for
 
 from .db import (
     list_tags_with_labels,    # list of {'tag','label'}
@@ -134,20 +134,24 @@ def status_page():
 
 @ui_bp.route("/setpoints", methods=["GET", "POST"])
 def setpoints():
-    msg = ""
+    # carry selection across requests
+    selected_name = (request.args.get("sel") or "").strip()
+
+    msg = request.args.get("m", "")  # message carried via redirect
     labels = tag_label_map()
     sps = fetch_setpoints()  # list of dicts describing setpoints
 
     if not sps:
         msg = "No setpoints configured. Add SETPOINTS in config.py."
         return render_template("setpoints.html", title="Setpoints",
-                               msg=msg, labels=labels, sps=[], values={})
+                               msg=msg, labels=labels, sps=[], values={}, selected_name=selected_name)
 
-    # Handle write (POST)
+    # POST (write) — do the write, then redirect back with ?sel=<name>&m=<msg>
     if request.method == "POST":
         name = (request.form.get("name") or (request.json or {}).get("name") or "").strip()
         value = (request.form.get("value") or (request.json or {}).get("value") or "").strip()
         sp = next((x for x in sps if x.get("name") == name), None)
+        selected_name = name or selected_name or sps[0]["name"]  # keep current selection
 
         try:
             fval = float(value)
@@ -173,15 +177,19 @@ def setpoints():
             pretty = labels.get(name, sp.get("label") or name)
             msg = f"Updated {pretty}" if (err == "" and ok) else f"Write failed for {pretty}: {err or 'unknown error'}"
 
-    # Always read fresh values (GET or after POST)
+        # Redirect so the page reload keeps the selection and shows the message
+        return redirect(url_for("ui.setpoints", sel=selected_name, m=msg))
+
+    # GET — read current values and render
+    # if no selected_name yet (first load), default to first
+    if not selected_name:
+        selected_name = sps[0]["name"]
+
     res, err = _with_modbus(lambda cli: _read_setpoints_values(cli, sps))
-    if isinstance(res, tuple):  # safety, but _with_modbus returns non-tuple
-        values, read_err = res
-        err = err or read_err
-    else:
-        values = res or {}
+    values = res or {}
     if err and not msg:
         msg = err
 
     return render_template("setpoints.html", title="Setpoints",
-                           msg=msg, labels=labels, sps=sps, values=values)
+                           msg=msg, labels=labels, sps=sps, values=values, selected_name=selected_name)
+
