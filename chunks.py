@@ -1,6 +1,7 @@
 # chunks.py
 import os, glob, sqlite3, time
-from typing import List, Tuple, Iterable, Dict, Optional
+from typing import List, Tuple, Iterable, Dict, Optional, Any, Set
+import sqlite3
 
 # Families by logger mode
 F_CONTINUOUS  = "continuous"   # interval
@@ -8,12 +9,12 @@ F_CONDITIONAL = "conditional"  # conditional
 F_ONCHANGE    = "onchange"     # on_change
 
 # Router state (built at startup)
-_CONT_TAGS: set[str] = set()
-_COND_TAGS: set[str] = set()
-_ONCHG_TAGS: set[str] = set()
+_CONT_TAGS: Set[str] = set()
+_COND_TAGS: Set[str] = set()
+_ONCHG_TAGS: Set[str] = set()
 _OVERRIDES: Dict[str, str] = {}
 
-def init_family_router(tags: list[dict], overrides: Optional[Dict[str, str]] = None):
+def init_family_router(tags: List[Dict[str, Any]], overrides: Optional[Dict[str, str]] = None):
     """Build routing sets from TAGS (expects each tag dict to have 'name' and 'mode')."""
     global _CONT_TAGS, _COND_TAGS, _ONCHG_TAGS, _OVERRIDES
     _CONT_TAGS.clear(); _COND_TAGS.clear(); _ONCHG_TAGS.clear()
@@ -103,7 +104,7 @@ def _rotate_chunk_if_needed(db_root: str, fam: str, chunk_max_mb: int):
         _active_chunk[fam] = p
 
 def write_rows_chunked(db_root: str, chunk_max_mb: int,
-                       rows: Iterable[Tuple[str,str,float,str]]):
+                       rows: Iterable[Tuple[str, str, float, str]]):
     """rows: (ts_iso, tag, value, unit)"""
     if not rows: return
     buckets: Dict[str, list] = {F_CONTINUOUS: [], F_CONDITIONAL: [], F_ONCHANGE: []}
@@ -209,9 +210,9 @@ def query_logs(db_root: str, tag: Optional[str], cal: str, limit: int):
     return rows[:limit]
 
 def query_logs_between(db_root: str,
-                       tag: str | None,
-                       start_iso: str | None,
-                       end_iso: str | None,
+                       tag: Optional[str],
+                       start_iso: Optional[str],
+                       end_iso: Optional[str],
                        limit: int):
     """
     Return newest→oldest rows within an explicit UTC-naive ISO range.
