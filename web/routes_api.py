@@ -178,6 +178,20 @@ def _maybe_bucket(rows, bucket_s: int):
     out.sort(key=lambda r: r[0], reverse=True)
     return out
 
+def download_csv(rows) -> str:
+    """
+    rows: iterable of (ts_iso_utc, tag, value, unit)
+    Writes CSV with an extra 'label' column using tag_meta.
+    """
+    buf = io.StringIO()
+    w = csv.writer(buf)
+    w.writerow(["ts_utc", "tag", "label", "value", "unit"])
+    tmap = _tag_map()  # {tag: {'label','unit'}}
+    for ts, tg, val, unit in rows:
+        label = tmap.get(tg, {}).get("label", tg)
+        w.writerow([ts, tg, label, "" if val is None else val, unit or ""])
+    return buf.getvalue()
+
 # ---------- routes ----------
 
 @api_bp.route("/logs")
