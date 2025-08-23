@@ -25,22 +25,33 @@ ui_bp = Blueprint("ui", __name__)
 def _with_modbus(op):
     """
     Open a new Modbus TCP connection, run op(cli), then close.
-    Returns (result, error_msg). On success, error_msg == ''.
+    Returns (result, error_msg). If op itself returns (result, error_msg),
+    we pass that through without nesting.
     """
     if not USE_MODBUS:
         return None, "Modbus not enabled on server"
+
     cli = ModbusTcpClient(host=PLC_IP, port=PLC_PORT, timeout=2)
     try:
         if not cli.connect():
             return None, "Modbus connect failed"
-        return op(cli), ""
+
+        rv = op(cli)
+
+        # If op already returned (result, err), pass it through unchanged.
+        if isinstance(rv, tuple) and len(rv) == 2 and isinstance(rv[1], (str, type(None))):
+            return rv
+
+        # Otherwise, wrap as (result, "")
+        return rv, ""
     except Exception as e:
-        return None, f"{e}"
+        return None, str(e)
     finally:
         try:
             cli.close()
         except Exception:
             pass
+
 
 def _mb_read_holding(cli, address: int, count: int):
     """Compat wrapper for pymodbus 2.x (unit=) vs 3.x (slave=)."""
@@ -185,8 +196,10 @@ def setpoints():
     if not selected_name:
         selected_name = sps[0]["name"]
 
-    res, err = _with_modbus(lambda cli: _read_setpoints_values(cli, sps))
-    values = res or {}
+    # Always read fresh values (GET or after POST)
+    values, err = _with_modbus(lambda cli: _read_setpoints_values(cli, sps))
+    values = values or {}
+
     if err and not msg:
         msg = err
 
