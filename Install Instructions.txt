@@ -38,14 +38,6 @@
 #       # optional caps/family_overrides...
 #     }
 
-# 0e) Ensure Gunicorn entrypoint exists:
-#   > nano /home/YOURUSER/plc_logger/modbus-2-db/wsgi.py
-#   vv BEGIN FILE vv
-#   from web import create_app
-#   app = create_app()
-#   ^^ END FILE ^^
-
-
 # ─────────────────────────────────────────────────────────────────────────────
 # Step 1 — Logger Service (systemd)
 # ─────────────────────────────────────────────────────────────────────────────
@@ -186,5 +178,5 @@ WantedBy=multi-user.target
 #        app = create_app()
 #
 # C) Port 5000 already in use
-#    - Change --bind in plc-web.service (e.g., 0.0.0.0:5001), then:
+#    - Change --bind in plc-web.service (e.g., 0.0.0.0:8081), then:
 #        > sudo systemctl restart plc-web

@@ -17,10 +17,37 @@ from config import DB_ROOT, RETENTION, PLC_IP, PLC_PORT, SLAVE_ID, WORD_ORDER, U
 # Fresh-per-request Modbus
 from pymodbus.client import ModbusTcpClient
 import struct
+import inspect  # <-- for robust pymodbus 2.x/3.x kwarg detection
 
 ui_bp = Blueprint("ui", __name__)
 
 # ---------- Modbus helpers (fresh connection, version-compatible) ----------
+
+# Cache which kw the current pymodbus exposes for the "unit/slave" argument.
+# We detect once per process and reuse.
+_UNIT_KW = None  # "unit", "slave", or None if neither (rare)
+
+def _detect_unit_kw(cli) -> str | None:
+    """
+    Inspect read_holding_registers signature to see whether it accepts "unit" or "slave".
+    Returns "unit", "slave", or None. Caches the result in _UNIT_KW.
+    """
+    global _UNIT_KW
+    if _UNIT_KW is not None:
+        return _UNIT_KW
+    try:
+        sig = inspect.signature(cli.read_holding_registers)
+        params = sig.parameters
+        if "unit" in params:
+            _UNIT_KW = "unit"
+        elif "slave" in params:
+            _UNIT_KW = "slave"
+        else:
+            _UNIT_KW = None
+    except Exception:
+        # Default to "unit" if we can't inspect (most common on 2.x)
+        _UNIT_KW = "unit"
+    return _UNIT_KW
 
 def _with_modbus(op):
     """
@@ -35,6 +62,9 @@ def _with_modbus(op):
     try:
         if not cli.connect():
             return None, "Modbus connect failed"
+
+        # Prime detection (once)
+        _detect_unit_kw(cli)
 
         rv = op(cli)
 
@@ -52,25 +82,52 @@ def _with_modbus(op):
         except Exception:
             pass
 
+def _apply_unit_kw(kwargs: dict, kw: str | None) -> dict:
+    """Return a copy of kwargs with the correct unit/slave kw injected if available."""
+    if kw:
+        out = dict(kwargs)
+        out[kw] = SLAVE_ID
+        return out
+    return kwargs
 
 def _mb_read_holding(cli, address: int, count: int):
-    """Compat wrapper for pymodbus 2.x (unit=) vs 3.x (slave=)."""
+    """Compat wrapper for pymodbus 2.x (unit=) vs 3.x (slave=) with fallback."""
+    kw = _detect_unit_kw(cli)
+    base = dict(address=address, count=count)
     try:
-        return cli.read_holding_registers(address=address, count=count, unit=SLAVE_ID)
+        return cli.read_holding_registers(**_apply_unit_kw(base, kw))
     except TypeError:
-        return cli.read_holding_registers(address=address, count=count, slave=SLAVE_ID)
+        # Try the alternate kw once (covers weird installs)
+        alt = "slave" if kw == "unit" else "unit"
+        try:
+            return cli.read_holding_registers(**_apply_unit_kw(base, alt))
+        except TypeError:
+            # Last resort: call without either kw
+            return cli.read_holding_registers(**base)
 
 def _mb_write_register(cli, address: int, value: int):
+    kw = _detect_unit_kw(cli)
+    base = dict(address=address, value=value)
     try:
-        return cli.write_register(address=address, value=value, unit=SLAVE_ID)
+        return cli.write_register(**_apply_unit_kw(base, kw))
     except TypeError:
-        return cli.write_register(address=address, value=value, slave=SLAVE_ID)
+        alt = "slave" if kw == "unit" else "unit"
+        try:
+            return cli.write_register(**_apply_unit_kw(base, alt))
+        except TypeError:
+            return cli.write_register(**base)
 
 def _mb_write_registers(cli, address: int, values):
+    kw = _detect_unit_kw(cli)
+    base = dict(address=address, values=values)
     try:
-        return cli.write_registers(address=address, values=values, unit=SLAVE_ID)
+        return cli.write_registers(**_apply_unit_kw(base, kw))
     except TypeError:
-        return cli.write_registers(address=address, values=values, slave=SLAVE_ID)
+        alt = "slave" if kw == "unit" else "unit"
+        try:
+            return cli.write_registers(**_apply_unit_kw(base, alt))
+        except TypeError:
+            return cli.write_registers(**base)
 
 def _float_to_words(val: float):
     """Encode float32 to two 16-bit words with WORD_ORDER ('HL' or 'LH')."""
@@ -212,4 +269,3 @@ def setpoints():
 
     return render_template("setpoints.html", title="Setpoints",
                            msg=msg, labels=labels, sps=sps, values=values, selected_name=selected_name)
-

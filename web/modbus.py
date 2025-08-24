@@ -1,81 +1,124 @@
-# web/modbus.py
-import struct
-from .db import fetch_setpoints
-from config import WORD_ORDER, PLC_IP, PLC_PORT, USE_MODBUS
+# web/modbus.py  (patch)
 
+import logging, struct
+from typing import Tuple, Dict, Any, List
+from pymodbus.client import ModbusTcpClient
+
+log = logging.getLogger("modbus")
+
+# from config.py
 try:
-    from pymodbus.client import ModbusTcpClient
+    from config import PLC_IP, PLC_PORT, SLAVE_ID, USE_MODBUS
 except Exception:
-    ModbusTcpClient = None
+    PLC_IP, PLC_PORT, SLAVE_ID, USE_MODBUS = "127.0.0.1", 502, 1, False
 
-_mb = None
-def mb_client():
-    if not USE_MODBUS or ModbusTcpClient is None:
+_client = None
+
+def mb_client() -> ModbusTcpClient | None:
+    global _client
+    if not USE_MODBUS:
         return None
-    global _mb
-    if _mb is None:
-        _mb = ModbusTcpClient(host=PLC_IP, port=PLC_PORT, timeout=2)
-    if not getattr(_mb, "connected", False):
-        try: _mb.connect()
-        except Exception: pass
-    return _mb
+    if _client is None:
+        _client = ModbusTcpClient(host=PLC_IP, port=PLC_PORT, timeout=2)
+        _client.connect()
+    return _client
 
-def float_to_words(val: float):
-    hi, lo = struct.unpack(">HH", struct.pack(">f", float(val)))
-    return (lo, hi) if WORD_ORDER == "LH" else (hi, lo)
+def float_to_words(val: float) -> Tuple[int, int]:
+    raw = struct.pack(">f", float(val))
+    hi, lo = struct.unpack(">HH", raw)
+    return hi, lo
 
-def words_to_float(hi, lo):
-    if WORD_ORDER == "LH":
-        hi, lo = lo, hi
-    return struct.unpack(">f", struct.pack(">HH", hi, lo))[0]
+# ----- compatibility shims for pymodbus 2.x (unit=) vs 3.x (slave=) -----
 
-def _setpoint_window(sps):
-    """Compute minimal contiguous %MW window covering all setpoints."""
-    if not sps:
-        return None
-    start = min(sp["mw"] for sp in sps)
-    # last used word index (inclusive)
-    end = max(sp["mw"] + (2 if sp.get("dtype", sp.get("type","FLOAT32")).upper() == "FLOAT32" else 1) - 1
-              for sp in sps)
-    count = end - start + 1
-    return start, count
+def _call_read_holding(c: ModbusTcpClient, **kwargs):
+    # Try new API (slave=) first
+    try:
+        return c.read_holding_registers(**kwargs, slave=SLAVE_ID)
+    except TypeError as e:
+        # Fallback to old API (unit=)
+        if "unexpected keyword argument 'slave'" in str(e):
+            return c.read_holding_registers(**kwargs, unit=SLAVE_ID)
+        raise
 
-def read_setpoint_block_dyn(sps=None):
-    """Return (values_dict, error_msg). values_dict maps name -> current_value."""
-    if sps is None:
-        sps = fetch_setpoints()
-    if not sps:
-        return {}, "No setpoints configured."
+def _call_write_register(c: ModbusTcpClient, **kwargs):
+    try:
+        return c.write_register(**kwargs, slave=SLAVE_ID)
+    except TypeError as e:
+        if "unexpected keyword argument 'slave'" in str(e):
+            return c.write_register(**kwargs, unit=SLAVE_ID)
+        raise
 
+def _call_write_registers(c: ModbusTcpClient, **kwargs):
+    try:
+        return c.write_registers(**kwargs, slave=SLAVE_ID)
+    except TypeError as e:
+        if "unexpected keyword argument 'slave'" in str(e):
+            return c.write_registers(**kwargs, unit=SLAVE_ID)
+        raise
+
+# ----- setpoint helpers used by the UI -----
+
+def read_setpoint_block_dyn(sps: List[Dict[str, Any]]) -> tuple[Dict[str, float], str]:
+    """
+    Read all configured setpoints in one windowed sweep when possible.
+    Returns (values_by_name, error_message_if_any)
+    """
     c = mb_client()
     if not c:
-        return {}, "Modbus client not available"
+        return {}, "Modbus not enabled on server"
 
-    win = _setpoint_window(sps)
-    if not win:
-        return {}, "No setpoints configured."
-    start, count = win
+    # group contiguous ranges (simple approach: one by one, robust & clear)
+    vals, first_err = {}, ""
+    for sp in sps:
+        try:
+            dtype = (sp.get("dtype") or sp.get("type") or "FLOAT32").upper()
+            mw = int(sp["mw"])
+            if dtype == "INT16":
+                rr = _call_read_holding(c, address=mw, count=1)
+                regs = getattr(rr, "registers", None)
+                if rr is None or (hasattr(rr, "isError") and rr.isError()) or not regs:
+                    raise RuntimeError(rr)
+                v = regs[0]
+                # interpret as signed 16
+                if v >= 32768: v -= 65536
+                vals[sp["name"]] = float(v)
+            else:
+                rr = _call_read_holding(c, address=mw, count=2)
+                regs = getattr(rr, "registers", None)
+                if rr is None or (hasattr(rr, "isError") and rr.isError()) or not regs or len(regs) < 2:
+                    raise RuntimeError(rr)
+                hi, lo = regs[0], regs[1]
+                if dtype == "FLOAT32":
+                    vals[sp["name"]] = struct.unpack(">f", struct.pack(">HH", hi, lo))[0]
+                elif dtype == "INT32":
+                    v = (hi << 16) | lo
+                    if v & 0x80000000: v -= (1<<32)
+                    vals[sp["name"]] = float(v)
+                else:  # UINT32 or default
+                    vals[sp["name"]] = float((hi << 16) | lo)
+        except Exception as e:
+            msg = f"Read exception @%MW{sp.get('mw')}: {e}"
+            log.warning(msg)
+            if not first_err:
+                first_err = msg
+
+    return vals, first_err
+
+def write_setpoint(name: str, sp: Dict[str, Any], fval: float) -> tuple[bool, str]:
+    """Write a single setpoint; returns (ok, message)."""
+    c = mb_client()
+    if not c:
+        return False, "Modbus not enabled on server"
 
     try:
-        rr = c.read_holding_registers(address=start, count=count)
-        if hasattr(rr, "isError") and rr.isError():
-            return {}, f"Modbus read error: {rr}"
-        regs = getattr(rr, "registers", None)
-        if not regs:
-            return {}, "No data returned."
+        mw = int(sp["mw"])
+        dtype = (sp.get("dtype") or sp.get("type") or "FLOAT32").upper()
+        if dtype == "INT16":
+            r = _call_write_register(c, address=mw, value=int(fval))
+        else:
+            hi, lo = float_to_words(fval)
+            r = _call_write_registers(c, address=mw, values=[hi, lo])
+        ok = not (hasattr(r, "isError") and r.isError())
+        return ok, ("OK" if ok else "Write failed")
     except Exception as e:
-        return {}, f"Modbus exception: {e}"
-
-    values = {}
-    for sp in sps:
-        i = sp["mw"] - start
-        dtype = sp.get("dtype", sp.get("type", "FLOAT32")).upper()
-        try:
-            if dtype == "INT16":
-                values[sp["name"]] = regs[i]
-            else:  # FLOAT32 (2 words)
-                values[sp["name"]] = words_to_float(regs[i], regs[i+1])
-        except Exception:
-            values[sp["name"]] = None
-
-    return values, None
+        return False, f"Write exception: {e}"
