@@ -1,5 +1,5 @@
-# /home/ele/plc_logger/Modbus-2-db/config.py
-DB_ROOT = "/home/ele/plc_logger/data"
+# /.../Modbus-2-db/config.py
+DB_ROOT = "/home/elemech/plc_logger/data"
 
 # Modbus / PLC
 USE_MODBUS = True

@@ -1,71 +1,37 @@
-# Install Instructions (EnvironmentFile-based)
+# Install Instructions (no EnvironmentFile)
 
-# This guide installs the Modbus logger and Web UI under systemd using Gunicorn.
-# All paths and the service user are configured in ONE file: /etc/default/plc-logger
+# This installs the Modbus logger and Web UI (Gunicorn) as systemd services.
+# Service paths use the service user’s HOME via %h:
+#   %h/plc_logger/{modbus-2-db, data, venv}
+# Edit only the User/Group lines in the unit files to match your account.
 
-# Assumptions:
-# - The app runs as a non-root user (e.g., 'ele').
-# - Web UI will bind to 0.0.0.0:8080 (LAN). Change to 127.0.0.1:8080 for local-only.
+# The Web UI bind is hardcoded to 0.0.0.0:8080 (LAN). Change to 127.0.0.1:8080 for local-only.
 
 
-# Step 0 - Prepare system & clone the repo
+# Step 0 — Prepare system & clone the repo
 
-# 0a) (Fresh machine) Install prerequisites:
-#   Debian/Ubuntu:
-#     > sudo apt update
-#     > sudo apt install -y git python3 python3-venv python3-pip tzdata
-#   RHEL/Fedora:
-#     > sudo dnf install -y git python3 python3-pip tzdata
+# 0a) Install prerequisites (Debian/Ubuntu/Raspberry Pi OS):
+#   > sudo apt update
+#   > sudo apt install -y git python3 python3-venv python3-pip tzdata
 
-# 0b) Choose an app root directory and clone the repo (as your normal user):
-#   Pick any path; we'll store it in /etc/default/plc-logger next.
-#   Example:
-#     > export APP_ROOT="$HOME/plc_logger"
-#     > mkdir -p "$APP_ROOT"
-#     > cd "$APP_ROOT"
-#     > git clone https://github.com/ski-20/modbus-2-db.git modbus-2-db
-#     > mkdir -p "$APP_ROOT/data"
+# 0b) Create project layout & clone (run as your normal user, not root):
+#   > mkdir -p "$HOME/plc_logger"
+#   > cd "$HOME/plc_logger"
+#   > git clone https://github.com/ski-20/modbus-2-db.git modbus-2-db
+#   > mkdir -p "$HOME/plc_logger/data"
 
 # 0c) Create the Python virtualenv & install dependencies:
-#     > python3 -m venv "$APP_ROOT/venv"
-#     > "$APP_ROOT/venv/bin/python" -m pip install --upgrade pip
-#     > "$APP_ROOT/venv/bin/pip" install -r "$APP_ROOT/modbus-2-db/requirements.txt"
-#     (If on Python 3.8 and zoneinfo errors appear:)
-#     > "$APP_ROOT/venv/bin/pip" install backports.zoneinfo
+#   > python3 -m venv "$HOME/plc_logger/venv"
+#   > "$HOME/plc_logger/venv/bin/python" -m pip install --upgrade pip
+#   > "$HOME/plc_logger/venv/bin/pip" install -r "$HOME/plc_logger/modbus-2-db/requirements.txt"
+#   (If on Python 3.8 and zoneinfo errors appear:)
+#   > "$HOME/plc_logger/venv/bin/pip" install backports.zoneinfo
 
 
-# Step 1 — Configure /etc/default/plc-logger (single source of truth)
-
-# Create the environment file (EDIT: USERNAME and APP_ROOT to match your setup).
-
-# vv BEGIN FILE vv
-# /etc/default/plc-logger
-USERNAME=ele
-
-# Base directory for the app; must match where you cloned/created things
-APP_ROOT=/home/ele/plc_logger
-
-# Derived paths (usually no need to edit)
-REPO=${APP_ROOT}/modbus-2-db
-VENV=${APP_ROOT}/venv
-DATA=${APP_ROOT}/data
-
-# Gunicorn bind address:
-#   0.0.0.0:8080 -> reachable on LAN
-#   127.0.0.1:8080 -> local-only access
-WEB_BIND=0.0.0.0:8080
-# ^^ END FILE ^^
-
-# Make sure the app directories are owned by USERNAME:
-#   > sudo chown -R ele:ele /home/ele/plc_logger
-#   (replace ele with your user if different)
-
-
-# Step 2 — Install Logger Service
+# Step 1 — Logger Service (systemd)
 
 # Create the unit file: /etc/systemd/system/plc-logger.service
-# IMPORTANT: paths/users are pulled from /etc/default/plc-logger
-
+# IMPORTANT: Replace YOURUSER/YOURGROUP with your Linux username/group.
 # vv BEGIN FILE vv
 [Unit]
 Description=PLC Modbus Logger
@@ -73,38 +39,35 @@ After=network-online.target
 Wants=network-online.target
 
 [Service]
-EnvironmentFile=/etc/default/plc-logger
-User=%E{USERNAME}
-Group=%E{USERNAME}
-WorkingDirectory=%E{REPO}
+User=YOURUSER
+Group=YOURGROUP
+WorkingDirectory=%h/plc_logger/modbus-2-db
 Environment=PYTHONUNBUFFERED=1
 
-# ensure data dir exists before start
-ExecStartPre=/usr/bin/mkdir -p %E{DATA}
+# Ensure data dir exists before start
+ExecStartPre=/usr/bin/mkdir -p %h/plc_logger/data
 
-# launch logger
-ExecStart=%E{VENV}/bin/python %E{REPO}/logger.py
+# Launch logger
+ExecStart=%h/plc_logger/venv/bin/python %h/plc_logger/modbus-2-db/logger.py
 
 Restart=always
 RestartSec=5
 
-# basic hardening
+# Basic hardening
 NoNewPrivileges=true
 PrivateTmp=true
 ProtectSystem=full
 ProtectHome=true
-ReadWritePaths=%E{APP_ROOT}
+ReadWritePaths=%h/plc_logger
 
 [Install]
 WantedBy=multi-user.target
 # ^^ END FILE ^^
 
 
-# Step 3 — Install Web UI system service (Gunicorn)
+# Step 2 — Web UI (Gunicorn) Service (systemd)
 
 # Create the unit file: /etc/systemd/system/plc-web.service
-# IMPORTANT: WEB_BIND comes from /etc/default/plc-logger (LAN vs local-only)
-
 # vv BEGIN FILE vv
 [Unit]
 Description=PLC Logger Web UI (Gunicorn)
@@ -112,35 +75,38 @@ After=plc-logger.service network-online.target
 Wants=plc-logger.service network-online.target
 
 [Service]
-EnvironmentFile=/etc/default/plc-logger
-User=%E{USERNAME}
-Group=%E{USERNAME}
-WorkingDirectory=%E{REPO}
+User=YOURUSER
+Group=YOURGROUP
 Environment=PYTHONUNBUFFERED=1
+WorkingDirectory=%h/plc_logger/modbus-2-db
 
 # Gunicorn: 2 workers, 4 threads each; adjust as needed
-ExecStart=%E{VENV}/bin/gunicorn \
+# LAN access (bind all interfaces):
+ExecStart=%h/plc_logger/venv/bin/gunicorn \
   --workers 2 --threads 4 --timeout 120 \
-  --bind %E{WEB_BIND} \
-  --chdir %E{REPO} \
+  --bind 0.0.0.0:8080 \
+  --chdir %h/plc_logger/modbus-2-db \
   'web:create_app()' --factory
+
+# For local-only access instead, change the --bind above to:
+#   --bind 127.0.0.1:8080
 
 Restart=always
 RestartSec=5
 
-# basic hardening
+# Basic hardening
 NoNewPrivileges=true
 PrivateTmp=true
 ProtectSystem=full
 ProtectHome=true
-ReadWritePaths=%E{APP_ROOT}
+ReadWritePaths=%h/plc_logger
 
 [Install]
 WantedBy=multi-user.target
 # ^^ END FILE ^^
 
 
-# Step 4 — Enable & start both services
+# Step 3 — Enable & start services
 
 #   > sudo systemctl daemon-reload
 #   > sudo systemctl enable plc-logger.service
@@ -148,31 +114,31 @@ WantedBy=multi-user.target
 #   > sudo systemctl start plc-logger.service
 #   > sudo systemctl start plc-web.service
 
-# If you set WEB_BIND=0.0.0.0:8080 and use a firewall (Ubuntu UFW example):
-#   > sudo ufw allow 8080/tcp
+# If using a firewall and you kept 0.0.0.0:8080 (LAN):
+#   > sudo ufw allow 8080/tcp   # (if UFW is installed)
 
 
-# Step 5 — Verification
+# Step 4 — Verification
 
 #   Service status:
 #     > sudo systemctl status plc-logger plc-web
 #
-#   Logs (follow):
-#     > sudo journalctl -u plc-logger -f
-#     > sudo journalctl -u plc-web -f
+#   Logs (tail):
+#     > sudo journalctl -u plc-logger -n 100 --no-pager
+#     > sudo journalctl -u plc-web -n 100 --no-pager
 #
-#   Reach the web UI:
+#   Open the web UI:
 #     - http://<device-ip>:8080/
-#     (or http://127.0.0.1:8080/ if WEB_BIND=127.0.0.1:8080)
+#     (or http://127.0.0.1:8080/ if you changed the bind to local-only)
 
 
-# Step 6 — Configure the app (one-time check)
+# Step 5 — Configure the app (one-time check)
 
 # Edit config.py to match your environment (DB root, timezone, caps):
-#   > nano "$(grep '^REPO=' /etc/default/plc-logger | cut -d= -f2)/config.py"
+#   > nano "$HOME/plc_logger/modbus-2-db/config.py"
 #
 # Ensure values such as:
-#   DB_ROOT = "/home/ele/plc_logger/data"   # should match DATA in /etc/default/plc-logger
+#   DB_ROOT = "/home/YOURUSER/plc_logger/data"
 #   LOCAL_TZ = "America/New_York"
 #   RETENTION = {
 #       "total_cap_mb": 10000,   # example 10 GB
@@ -181,34 +147,31 @@ WantedBy=multi-user.target
 #   }
 
 
-# Step 7 — Updating
+# Step 6 — Updating
 
-#   Pull latest code:
-#     > cd "$(grep '^REPO=' /etc/default/plc-logger | cut -d= -f2)"
-#     > git pull
+# Pull latest code:
+#   > cd "$HOME/plc_logger/modbus-2-db"
+#   > git pull
 #
-#   If requirements changed:
-#     > source "$(grep '^VENV=' /etc/default/plc-logger | cut -d= -f2)/bin/activate"
-#     > pip install -r requirements.txt
+# If requirements changed:
+#   > source "$HOME/plc_logger/venv/bin/activate"
+#   > pip install -r requirements.txt
 #
-#   Restart services:
-#     > sudo systemctl restart plc-logger plc-web
+# Restart services:
+#   > sudo systemctl restart plc-logger plc-web
 #
-#   Only run daemon-reload if you changed the unit files or /etc/default/plc-logger:
-#     > sudo systemctl daemon-reload
+# Only run daemon-reload if you changed the unit files:
+#   > sudo systemctl daemon-reload
 
 
-# Common hiccups
+# Troubleshooting
 
-# - Permission errors writing data:
-#     Ensure ownership matches USERNAME in /etc/default/plc-logger:
-#     > sudo chown -R ele:ele /home/ele/plc_logger
-#
-# - Web not reachable from other devices:
-#     Set WEB_BIND=0.0.0.0:8080 in /etc/default/plc-logger and allow the port in your firewall.
-#
-# - Zoneinfo errors on Python 3.8:
-#     Install backports.zoneinfo into the venv.
-#
+# - "bad unit file setting":
+#     Make sure you replaced YOURUSER/YOURGROUP in BOTH units.
+# - Permissions writing to data dir:
+#     > sudo chown -R YOURUSER:YOURGROUP "$HOME/plc_logger"
+# - Web not reachable from LAN:
+#     Ensure --bind is 0.0.0.0:8080 and port 8080 is allowed in your firewall.
+#     > ss -tlnp | grep 8080   # verify Gunicorn is listening
 # - PLC connection issues:
-#     Verify PLC_IP, PLC_PORT, cabling, and Modbus unit/slave ID (if used).
+#     Check PLC_IP/PLC_PORT in config.py and physical network connectivity.
