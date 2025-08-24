@@ -7,7 +7,7 @@ SAMPLE_SEC = 0.5   # poll interval for Modbus reads
 # --- System tags ---
 SYSTEM_TAGS = [
     {"name": "SYS_WetWellLevel", "label": "Wet Well Level", "mw": 440,
-     "dtype": "FLOAT32", "scale": 1.0, "unit": "level",
+     "dtype": "FLOAT32", "scale": 1.0, "unit": "In.",
      "mode": "interval", "interval_sec": 10},
 
     {"name": "SYS_OutDataWord", "label": "System Output Data Word", "mw": 442,
@@ -39,11 +39,11 @@ def pump_tags(base: int, pump_key: str, pump_label: str):
          "mode":"conditional", "condition":{"tag":f"{pump_key}_MotorStatus","op":"==","value":1}},
 
         {"name":f"{pump_key}_DrvThermalState", "label":f"{pump_label} Drive Thermal State",
-         "mw":base+5,  "dtype":"INT16", "scale":1.0, "unit":"raw",
+         "mw":base+5,  "dtype":"INT16", "scale":1.0, "unit":"%",
          "mode":"conditional", "condition":{"tag":f"{pump_key}_MotorStatus","op":"==","value":1}},
 
         {"name":f"{pump_key}_MotorPower", "label":f"{pump_label} Motor Power",
-         "mw":base+6,  "dtype":"UINT16", "scale":1.0, "unit":"",
+         "mw":base+6,  "dtype":"UINT16", "scale":1.0, "unit":"%",
          "mode":"conditional", "condition":{"tag":f"{pump_key}_MotorStatus","op":"==","value":1}},
 
         {"name":f"{pump_key}_FaultCode", "label":f"{pump_label} Previous Fault",
